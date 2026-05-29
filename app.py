@@ -324,7 +324,6 @@ if data_result is not None:
     w_fire = round(1.0 - w_flood, 1)
     st.sidebar.markdown(f"""
         Вес риска пожаров
-        
         ### {w_fire}
         """)
 
