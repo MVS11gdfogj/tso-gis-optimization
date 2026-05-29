@@ -324,7 +324,7 @@ if data_result is not None:
     w_fire = round(1.0 - w_flood, 1)
     st.sidebar.markdown(f"""
         Вес риска пожаров
-        ### {w_fire}
+        ## {w_fire}
         """)
 
     alpha = st.sidebar.slider("Коэф. масштабирования (α)", 0.1, 1.5, 0.9, 0.1)
