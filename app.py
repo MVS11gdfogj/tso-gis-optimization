@@ -306,6 +306,7 @@ def run_optimization(df_zones, w_fire, w_flood, alpha, budget_large, budget_smal
         for item in report:
             np_name = item["Н.П."]
             item["Население"] = item["Население"] / counts_geo[np_name]
+            item["Охват"] = int(item["Охват"] / counts_geo[np_name])
             
     final_obj = init_risk + pulp.value(prob.objective)
     return pd.DataFrame(report), init_risk, final_obj
