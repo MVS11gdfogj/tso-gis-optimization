@@ -322,7 +322,7 @@ if data_result is not None:
     
     w_flood = st.sidebar.slider("Вес риска наводнений", 0.0, 1.0, 0.4, 0.1)
     w_fire = round(1.0 - w_flood, 1)
-    st.sidebar.header("Вес риска пожаров", w_fire)
+    st.sidebar.markdown(f"Вес риска пожаров: **{w_fire}**")
 
     alpha = st.sidebar.slider("Коэф. масштабирования (α)", 0.1, 1.5, 0.9, 0.1)
     q_min = st.sidebar.slider("Порог надежности ТСО (Q_min)", 0.1, 0.9, 0.60, 0.05)
