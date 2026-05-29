@@ -292,7 +292,21 @@ def run_optimization(df_zones, w_fire, w_flood, alpha, budget_large, budget_smal
             report.append({"Район": row['Район'], "Н.П.": row['Населенный_пункт'], "Широта": row['lat_cluster'],
                            "Долгота": row['lon_cluster'], "Население": pop_int, "Тип угрозы": th, "ТСО": "ОТБРАКОВАНО",
                            "Канал": "-", "Стоимость": 0, "Охват": 0, "Надежность": 0.0, "color": [50, 50, 50, 150]})
+        counts_geo = {}
 
+        for item in report:
+            np_name = item["Н.П."]
+            
+            if np_name in counts:
+                counts_geo[np_name] += 1
+            else:
+                counts_geo[np_name] = 1
+        
+        # Обновление населения прямо в исходном списке
+        for item in report:
+            np_name = item["Н.П."]
+            item["Население"] = item["Население"] / counts_geo[np_name]
+            
     final_obj = init_risk + pulp.value(prob.objective)
     return pd.DataFrame(report), init_risk, final_obj
 
