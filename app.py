@@ -297,7 +297,7 @@ def run_optimization(df_zones, w_fire, w_flood, alpha, budget_large, budget_smal
         for item in report:
             np_name = item["Н.П."]
             
-            if np_name in counts:
+            if np_name in counts_geo:
                 counts_geo[np_name] += 1
             else:
                 counts_geo[np_name] = 1
