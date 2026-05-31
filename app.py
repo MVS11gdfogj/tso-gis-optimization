@@ -8,6 +8,7 @@ import warnings
 import matplotlib.pyplot as plt
 import seaborn as sns
 import os
+import re
 from openai import OpenAI
 from docx import Document
 from docx.shared import Inches, Pt
@@ -119,6 +120,34 @@ def get_tatarstan_geojson():
 
 # --- 2. КЭШИРОВАНИЕ И ИНТЕГРАЦИЯ ДАННЫХ ---
 @st.cache_data
+def clean_name(name):
+    if pd.isna(name):
+        return ""
+
+    name = str(name).lower().strip()
+
+    prefixes = [
+        "город", "г.", "г ",
+        "село", "с.", "с ",
+        "деревня", "д.", "дер.", "д ", "дер ",
+        "поселок", "посёлок", "п.", "п ",
+        "пгт",
+        "станция", "ст.", "ст ",
+        "хутор", "х.", "х ",
+        "аул"
+    ]
+
+    for prefix in prefixes:
+        name = re.sub(rf"^{re.escape(prefix)}\s*", "", name)
+
+    name = name.replace("ё", "е")
+    name = name.replace(".", " ")
+    name = name.replace("«", "")
+    name = name.replace("»", "")
+    name = name.replace('"', "")
+    name = re.sub(r"\s+", " ", name)
+
+    return name.strip()
 def load_data():
     try:
         df_matrix = pd.read_excel('СУПЕР_МАТРИЦА_ЭТАЛОН_ОБЪЕДИНЕННАЯ.xlsx')
@@ -128,6 +157,30 @@ def load_data():
         df_zones = df_matrix.groupby(['Район', 'Населенный_пункт', 'lat_cluster', 'lon_cluster']).agg({
             'acq_date': 'max', 'latitude': 'count', 'Население': 'max'
         }).reset_index().rename(columns={'latitude': 'Кол_во_инцидентов'})
+        # --- ДОБАВЛЯЕМ КООРДИНАТЫ НАСЕЛЕННЫХ ПУНКТОВ ИЗ OSM ---
+try:
+    df_settlements = pd.read_csv("settlements_tatarstan_clean.csv")
+
+    df_zones["np_clean"] = df_zones["Населенный_пункт"].apply(clean_name)
+
+    df_zones = pd.merge(
+        df_zones,
+        df_settlements[["np_clean", "lat_np", "lon_np", "Населенный_пункт_OSM", "place"]],
+        on="np_clean",
+        how="left"
+    )
+
+    missing_coords = df_zones["lat_np"].isna().sum()
+
+    if missing_coords > 0:
+        st.warning(f"Не найдены координаты населенных пунктов для {missing_coords} строк.")
+
+except Exception as e:
+    st.warning(f"Не удалось подключить координаты населенных пунктов: {e}")
+
+    # Если координаты НП не найдены, временно используем координаты риска
+    df_zones["lat_np"] = df_zones["lat_cluster"]
+    df_zones["lon_np"] = df_zones["lon_cluster"]
 
         df_fire = pd.read_excel('Риски_РТ_Для_QGIS.xlsx')
         df_zones = pd.merge(df_zones, df_fire[['Район', 'Индекс_Риска_R']], on='Район', how='left')
