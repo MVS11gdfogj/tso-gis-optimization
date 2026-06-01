@@ -14,8 +14,6 @@ from docx.shared import Inches, Pt
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from io import BytesIO
 
-from shapely.geometry import Point
-from pyproj import Transformer
 import math
 
 warnings.filterwarnings('ignore')
@@ -309,86 +307,114 @@ def load_settlements():
         st.warning(f"Не удалось загрузить settlements_tatarstan_clean.csv: {e}")
         return pd.DataFrame()
 
-def add_people_in_threat_zones(df_threats, df_settlements):
+@st.cache_data(show_spinner=False)
+def add_people_in_threat_zones_fast(df_threats, df_settlements):
     """
-    Считает, сколько людей из зон населенных пунктов попадает
-    в каждую опасную зону.
-
-    df_threats — датафрейм опасных зон, например df_res.
-    df_settlements — датафрейм из settlements_tatarstan_clean.csv.
+    Быстрый расчет людей в опасных зонах без shapely.
+    Использует формулу площади пересечения двух окружностей.
     """
 
     if df_threats is None or df_threats.empty:
         return df_threats
 
+    df_threats = df_threats.copy()
+
     if df_settlements is None or df_settlements.empty:
-        df_threats = df_threats.copy()
         df_threats['Людей_в_опасной_зоне'] = 0
         df_threats['Площадь_пересечения_м2'] = 0
         return df_threats
 
-    df_threats = df_threats.copy()
     df_settlements = df_settlements.copy()
 
-    # Проекция для Татарстана.
-    # EPSG:32639 — UTM zone 39N, метры.
-    transformer = Transformer.from_crs("EPSG:4326", "EPSG:32639", always_xy=True)
+    # Средняя широта Татарстана. Для расчета расстояний в метрах.
+    lat0 = 55.5
+    meters_per_degree_lat = 111_320
+    meters_per_degree_lon = 111_320 * math.cos(math.radians(lat0))
 
-    def make_circle(lon, lat, radius_m):
-        x, y = transformer.transform(float(lon), float(lat))
-        return Point(x, y).buffer(float(radius_m), resolution=48)
+    def circle_intersection_area(r1, r2, d):
+        """
+        Площадь пересечения двух окружностей.
+        r1, r2, d — в метрах.
+        """
 
-    # Геометрии населенных пунктов
-    settlement_geoms = []
+        if d >= r1 + r2:
+            return 0.0
 
-    for _, row in df_settlements.iterrows():
-        if pd.isna(row['lat_np']) or pd.isna(row['lon_np']) or pd.isna(row['radius_m']):
-            continue
+        if d <= abs(r1 - r2):
+            return math.pi * min(r1, r2) ** 2
 
-        geom = make_circle(row['lon_np'], row['lat_np'], row['radius_m'])
+        part1 = r1 ** 2 * math.acos((d ** 2 + r1 ** 2 - r2 ** 2) / (2 * d * r1))
+        part2 = r2 ** 2 * math.acos((d ** 2 + r2 ** 2 - r1 ** 2) / (2 * d * r2))
+        part3 = 0.5 * math.sqrt(
+            max(
+                0,
+                (-d + r1 + r2)
+                * (d + r1 - r2)
+                * (d - r1 + r2)
+                * (d + r1 + r2)
+            )
+        )
 
-        settlement_geoms.append({
-            'name': row.get('Населенный_пункт_OSM', ''),
-            'geom': geom,
-            'people_per_m2': float(row.get('people_per_m2', 0)),
-            'population': float(row.get('population_calc', 0))
-        })
+        return part1 + part2 - part3
+
+    # Подготовка населенных пунктов в numpy-массивах
+    settlements_valid = df_settlements.dropna(subset=['lat_np', 'lon_np', 'radius_m']).copy()
+
+    if settlements_valid.empty:
+        df_threats['Людей_в_опасной_зоне'] = 0
+        df_threats['Площадь_пересечения_м2'] = 0
+        return df_threats
+
+    s_x = settlements_valid['lon_np'].astype(float).to_numpy() * meters_per_degree_lon
+    s_y = settlements_valid['lat_np'].astype(float).to_numpy() * meters_per_degree_lat
+    s_r = settlements_valid['radius_m'].astype(float).to_numpy()
+    s_density = settlements_valid['people_per_m2'].fillna(0).astype(float).to_numpy()
 
     people_results = []
     area_results = []
 
     for _, threat in df_threats.iterrows():
-        # Радиус опасной зоны.
-        # Если у тебя уже есть отдельная колонка радиуса угрозы, используй ее.
-        # Например: threat_radius_m
-        threat_radius = threat.get('threat_radius_m', 400)
-
         if pd.isna(threat['Широта']) or pd.isna(threat['Долгота']):
             people_results.append(0)
             area_results.append(0)
             continue
 
-        threat_geom = make_circle(threat['Долгота'], threat['Широта'], threat_radius)
+        threat_radius = float(threat.get('threat_radius_m', 400))
+
+        t_x = float(threat['Долгота']) * meters_per_degree_lon
+        t_y = float(threat['Широта']) * meters_per_degree_lat
+
+        dx = s_x - t_x
+        dy = s_y - t_y
+        distances = np.sqrt(dx * dx + dy * dy)
+
+        # Быстрый предварительный фильтр:
+        # берем только те НП, окружности которых вообще могут пересечься с угрозой
+        candidate_mask = distances <= (s_r + threat_radius)
+
+        if not np.any(candidate_mask):
+            people_results.append(0)
+            area_results.append(0)
+            continue
+
+        cand_distances = distances[candidate_mask]
+        cand_radii = s_r[candidate_mask]
+        cand_density = s_density[candidate_mask]
 
         total_people = 0.0
-        total_intersection_area = 0.0
+        total_area = 0.0
 
-        for settlement in settlement_geoms:
-            settlement_geom = settlement['geom']
+        for d, settlement_radius, density in zip(cand_distances, cand_radii, cand_density):
+            inter_area = circle_intersection_area(threat_radius, settlement_radius, d)
 
-            if not threat_geom.intersects(settlement_geom):
+            if inter_area <= 0:
                 continue
 
-            intersection = threat_geom.intersection(settlement_geom)
-            intersection_area = intersection.area
+            total_area += inter_area
+            total_people += inter_area * density
 
-            people_inside = intersection_area * settlement['people_per_m2']
-
-            total_intersection_area += intersection_area
-            total_people += people_inside
-
-        people_results.append(round(total_people))
-        area_results.append(round(total_intersection_area, 2))
+        people_results.append(int(round(total_people)))
+        area_results.append(round(total_area, 2))
 
     df_threats['Людей_в_опасной_зоне'] = people_results
     df_threats['Площадь_пересечения_м2'] = area_results
@@ -633,7 +659,7 @@ if data_result is not None:
             }).fillna(700)
         
         # Считаем людей, попадающих в опасные зоны
-        df_res = add_people_in_threat_zones(df_res, settlements_points)
+        df_res = add_people_in_threat_zones_fast(df_res, settlements_points)
 
         df_res['tooltip_html'] = (
             "<b>" + df_res['Н.П.'].astype(str) + "</b> (" + df_res['Район'].astype(str) + ")<br/>"
