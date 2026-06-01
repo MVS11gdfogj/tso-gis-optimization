@@ -244,7 +244,7 @@ def load_settlements():
 
             # Специальные правила
             if name == 'казань':
-                return 30000
+                return 20000
             if name == 'набережные челны':
                 return 7370
 
