@@ -158,22 +158,22 @@ def load_data():
                                 on='Населенный_пункт', how='left')
         except:
             pass
+        df_zones['Старая_сирена'] = "НЕТ"
+        # try:
+        #     df_old = pd.read_excel('Справочник_ТСО_ФИНАЛ.xlsx')
+        #     old_lats = np.radians(df_old['latitude'].values)
+        #     old_lons = np.radians(df_old['longitude'].values)
 
-        try:
-            df_old = pd.read_excel('Справочник_ТСО_ФИНАЛ.xlsx')
-            old_lats = np.radians(df_old['latitude'].values)
-            old_lons = np.radians(df_old['longitude'].values)
+        #     def check_siren_radius(lat, lon, radius_km=0.600):
+        #         lat1, lon1 = np.radians(lat), np.radians(lon)
+        #         a = np.sin((old_lats - lat1) / 2) ** 2 + np.cos(lat1) * np.cos(old_lats) * np.sin(
+        #             (old_lons - lon1) / 2) ** 2
+        #         return "ДА" if np.any(6371.0 * (2 * np.arctan2(np.sqrt(a), np.sqrt(1 - a))) <= radius_km) else "НЕТ"
 
-            def check_siren_radius(lat, lon, radius_km=0.600):
-                lat1, lon1 = np.radians(lat), np.radians(lon)
-                a = np.sin((old_lats - lat1) / 2) ** 2 + np.cos(lat1) * np.cos(old_lats) * np.sin(
-                    (old_lons - lon1) / 2) ** 2
-                return "ДА" if np.any(6371.0 * (2 * np.arctan2(np.sqrt(a), np.sqrt(1 - a))) <= radius_km) else "НЕТ"
-
-            df_zones['Старая_сирена'] = df_zones.apply(lambda r: check_siren_radius(r['lat_cluster'], r['lon_cluster']),
-                                                       axis=1)
-        except:
-            df_zones['Старая_сирена'] = "НЕТ"
+        #     df_zones['Старая_сирена'] = df_zones.apply(lambda r: check_siren_radius(r['lat_cluster'], r['lon_cluster']),
+        #                                                axis=1)
+        # except:
+        #     df_zones['Старая_сирена'] = "НЕТ"
 
         df_zones = df_zones.fillna({
             'Индекс_Огня': 0.0, 'Индекс_Воды': 0.0,
@@ -695,6 +695,7 @@ def run_optimization(df_zones, w_fire, w_flood, alpha, budget_large, budget_smal
 boundary_data = get_tatarstan_geojson()
 
 settlements_points = load_settlements()
+old_tso_points = load_old_tso()
 
 data_result_raw = load_data()
 
@@ -796,7 +797,25 @@ if data_result is not None:
         
         #СПЕЦИАЛЬНЫЙ ТЕКСТ ДЛЯ РАСЦО
         df_res = df_res.copy()
-
+        if 'Людей_в_опасной_зоне' not in df_res.columns:
+            df_res['Людей_в_опасной_зоне'] = 0
+        
+        if 'Площадь_пересечения_м2' not in df_res.columns:
+            df_res['Площадь_пересечения_м2'] = 0
+        
+        df_res['threat_radius_m'] = 400
+        
+        df_res['tooltip_html'] = (
+            "<b>" + df_res['Н.П.'].astype(str) + "</b> (" + df_res['Район'].astype(str) + ")<br/>"
+            "<b>Угроза:</b> " + df_res['Тип угрозы'].astype(str) + "<br/>"
+            "<b>Радиус опасной зоны:</b> 400 м<br/>"
+            "<b>Людей в опасной зоне:</b> " + df_res['Людей_в_опасной_зоне'].fillna(0).round(0).astype(int).astype(str) + " чел.<br/>"
+            "<b>Площадь пересечения с НП:</b> " + df_res['Площадь_пересечения_м2'].fillna(0).round(0).astype(int).astype(str) + " м²<br/>"
+            "<b>Выбрано:</b> " + df_res['ТСО'].astype(str) + " (" + df_res['Канал'].astype(str) + ")<br/>"
+            "<b>Стоимость:</b> " + df_res['Стоимость'].astype(str) + " у.е.<br/>"
+            "<b>Охват:</b> " + df_res['Охват'].astype(str) + " чел.<br/>"
+            "<b>Надежность:</b> " + df_res['Надежность'].astype(str)
+        )
         # Если радиуса угрозы еще нет — задаем его
         df_res['threat_radius_m'] = 400
         
@@ -849,24 +868,33 @@ if data_result is not None:
             layers.append(pdk.Layer("GeoJsonLayer", boundary_data, opacity=0.3, stroked=True, filled=True,
                                     get_fill_color=[100, 150, 200, 20], get_line_color=[100, 100, 100, 150],
                                     line_width_min_pixels=1))
-        layers.append(pdk.Layer("ScatterplotLayer", data=df_res[df_res['ТСО'] != 'ОБОРУДОВАНО СТАРОЙ СИРЕНОЙ'],
-                                get_position=["Долгота", "Широта"], get_color="color", get_radius=400, pickable=True, filled=True))
+        layers.append(
+            pdk.Layer(
+                "ScatterplotLayer",
+                data=df_threats_map,
+                get_position=["Долгота", "Широта"],
+                get_color="color",
+                get_radius=400,
+                pickable=True,
+                filled=True
+            )
+        )
 
-        # if old_tso_points is not None and not old_tso_points.empty:
-        #     layers.append(
-        #         pdk.Layer(
-        #             "ScatterplotLayer",
-        #             data=old_tso_points,
-        #             get_position=["longitude", "latitude"],
-        #             get_fill_color=[50, 200, 50, 180],
-        #             get_line_color=[20, 120, 20, 255],
-        #             get_radius=300,
-        #             stroked=True,
-        #             filled=True,
-        #             line_width_min_pixels=2,
-        #             pickable=True
-        #         )
-        #     )
+        if old_tso_points is not None and not old_tso_points.empty:
+            layers.append(
+                pdk.Layer(
+                    "ScatterplotLayer",
+                    data=old_tso_points,
+                    get_position=["longitude", "latitude"],
+                    get_fill_color=[50, 200, 50, 180],
+                    get_line_color=[20, 120, 20, 255],
+                    get_radius=300,
+                    stroked=True,
+                    filled=True,
+                    line_width_min_pixels=2,
+                    pickable=True
+                )
+            )
 
         st.pydeck_chart(pdk.Deck(
             layers=layers,
