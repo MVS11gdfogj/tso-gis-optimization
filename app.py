@@ -120,6 +120,126 @@ def get_tatarstan_geojson():
 
 
 # --- 2. КЭШИРОВАНИЕ И ИНТЕГРАЦИЯ ДАННЫХ ---
+
+
+def _first_non_empty_value(series, default=''):
+    """Возвращает наиболее частое непустое значение из Series."""
+    try:
+        cleaned = series.dropna().astype(str)
+        cleaned = cleaned[cleaned.str.strip() != '']
+        if cleaned.empty:
+            return default
+        return cleaned.mode().iloc[0]
+    except Exception:
+        return default
+
+
+def aggregate_nearby_threat_zones(df_zones, radius_m=500):
+    """
+    Объединяет опасные зоны, центры которых находятся в радиусе radius_m друг от друга.
+    Для каждой группы оставляется одна усредненная зона, чтобы далее подобрать одну ТСО
+    той же MILP-моделью run_optimization.
+    """
+    if df_zones is None or df_zones.empty:
+        return df_zones
+
+    df = df_zones.copy().reset_index(drop=True)
+    df['lat_cluster'] = pd.to_numeric(df['lat_cluster'], errors='coerce')
+    df['lon_cluster'] = pd.to_numeric(df['lon_cluster'], errors='coerce')
+    df = df.dropna(subset=['lat_cluster', 'lon_cluster']).reset_index(drop=True)
+
+    if len(df) <= 1:
+        df['Кол_во_опасностей_в_группе'] = len(df)
+        return df
+
+    lat0 = 55.5
+    meters_per_degree_lat = 111_320
+    meters_per_degree_lon = 111_320 * math.cos(math.radians(lat0))
+
+    xs = df['lon_cluster'].astype(float).to_numpy() * meters_per_degree_lon
+    ys = df['lat_cluster'].astype(float).to_numpy() * meters_per_degree_lat
+
+    parent = list(range(len(df)))
+    rank = [0] * len(df)
+
+    def find(a):
+        while parent[a] != a:
+            parent[a] = parent[parent[a]]
+            a = parent[a]
+        return a
+
+    def union(a, b):
+        ra, rb = find(a), find(b)
+        if ra == rb:
+            return
+        if rank[ra] < rank[rb]:
+            parent[ra] = rb
+        elif rank[ra] > rank[rb]:
+            parent[rb] = ra
+        else:
+            parent[rb] = ra
+            rank[ra] += 1
+
+    # Быстрый пространственный индекс: сравниваем точку только с соседними ячейками.
+    cell_size = float(radius_m)
+    grid = {}
+    for i, (x, y) in enumerate(zip(xs, ys)):
+        cx = int(math.floor(x / cell_size))
+        cy = int(math.floor(y / cell_size))
+        for gx in range(cx - 1, cx + 2):
+            for gy in range(cy - 1, cy + 2):
+                for j in grid.get((gx, gy), []):
+                    dx = x - xs[j]
+                    dy = y - ys[j]
+                    if dx * dx + dy * dy <= radius_m * radius_m:
+                        union(i, j)
+        grid.setdefault((cx, cy), []).append(i)
+
+    groups = {}
+    for i in range(len(df)):
+        groups.setdefault(find(i), []).append(i)
+
+    rows = []
+    for group_indices in groups.values():
+        g = df.iloc[group_indices].copy()
+
+        lat_mean = float(g['lat_cluster'].mean())
+        lon_mean = float(g['lon_cluster'].mean())
+        row = {
+            'Район': _first_non_empty_value(g['Район'], 'Нет данных') if 'Район' in g.columns else 'Нет данных',
+            'Населенный_пункт': _first_non_empty_value(g['Населенный_пункт'], 'Нет данных') if 'Населенный_пункт' in g.columns else 'Нет данных',
+            'lat_cluster': round(lat_mean, 6),
+            'lon_cluster': round(lon_mean, 6),
+            'lat_key': round(lat_mean, 2),
+            'lon_key': round(lon_mean, 2),
+            'acq_date': g['acq_date'].max() if 'acq_date' in g.columns else 'Нет данных',
+            'Кол_во_инцидентов': int(pd.to_numeric(g.get('Кол_во_инцидентов', 1), errors='coerce').fillna(1).sum()),
+            'Кол_во_опасностей_в_группе': int(len(g)),
+            'Старая_сирена': 'НЕТ'
+        }
+
+        for col in ['Индекс_Огня', 'Индекс_Воды', 'До_ближайшей_2G_вышки_км', 'До_ближайшей_4G_вышки_км']:
+            if col in g.columns:
+                row[col] = float(pd.to_numeric(g[col], errors='coerce').fillna(0).mean())
+
+        rows.append(row)
+
+    result = pd.DataFrame(rows)
+
+    # Гарантируем наличие служебных колонок, нужных дальнейшей модели.
+    for col, default in {
+        'Индекс_Огня': 0.0,
+        'Индекс_Воды': 0.0,
+        'До_ближайшей_2G_вышки_км': 10.0,
+        'До_ближайшей_4G_вышки_км': 10.0,
+        'acq_date': 'Нет данных',
+        'Старая_сирена': 'НЕТ'
+    }.items():
+        if col not in result.columns:
+            result[col] = default
+
+    return result.reset_index(drop=True)
+
 @st.cache_data
 def load_data():
     try:
@@ -189,6 +309,10 @@ def load_data():
             'Индекс_Огня': 0.0, 'Индекс_Воды': 0.0,
             'До_ближайшей_2G_вышки_км': 10.0, 'До_ближайшей_4G_вышки_км': 10.0, 'acq_date': 'Нет данных'
         })
+
+        # Если несколько опасных зон находятся в радиусе 500 м, объединяем их в одну
+        # усредненную опасную зону. Далее MILP-модель подбирает одну ТСО на эту группу.
+        df_zones = aggregate_nearby_threat_zones(df_zones, radius_m=500)
 
         return df_zones
     except Exception as e:
@@ -261,7 +385,7 @@ def load_settlements():
 
             # Специальные правила
             if name == 'казань':
-                return 30000
+                return 20000
             if name == 'набережные челны':
                 return 7370
 
@@ -465,11 +589,21 @@ def build_threat_tooltip(df_res):
             df_res[col] = 0
     if 'threat_radius_m' not in df_res.columns:
         df_res['threat_radius_m'] = 400
+    if 'Кол_во_опасностей_в_группе' not in df_res.columns:
+        df_res['Кол_во_опасностей_в_группе'] = 1
+    if 'Кол_во_инцидентов' not in df_res.columns:
+        df_res['Кол_во_инцидентов'] = 1
+
+    lat_text = pd.to_numeric(df_res['Широта'], errors='coerce').round(6).astype(str)
+    lon_text = pd.to_numeric(df_res['Долгота'], errors='coerce').round(6).astype(str)
 
     df_res['tooltip_html'] = (
         "<b>" + df_res['Н.П.'].astype(str) + "</b> (" + df_res['Район'].astype(str) + ")<br/>"
+        "<b>Координаты:</b> " + lat_text + ", " + lon_text + "<br/>"
         "<b>Угроза:</b> " + df_res['Тип угрозы'].astype(str) + "<br/>"
         "<b>Радиус опасной зоны:</b> 400 м<br/>"
+        "<b>Объединено зон в радиусе 500 м:</b> " + df_res['Кол_во_опасностей_в_группе'].fillna(1).round(0).astype(int).astype(str) + "<br/>"
+        "<b>Количество инцидентов:</b> " + df_res['Кол_во_инцидентов'].fillna(1).round(0).astype(int).astype(str) + "<br/>"
         "<b>Людей в опасной зоне:</b> " + df_res['Людей_в_опасной_зоне'].fillna(0).round(0).astype(int).astype(str) + " чел.<br/>"
         "<b>Площадь пересечения с НП:</b> " + df_res['Площадь_пересечения_м2'].fillna(0).round(0).astype(int).astype(str) + " м²<br/>"
         "<b>Выбрано:</b> " + df_res['ТСО'].astype(str) + " (" + df_res['Канал'].astype(str) + ")<br/>"
@@ -684,12 +818,13 @@ def run_optimization(df_zones, w_fire, w_flood, alpha, budget_large, budget_smal
         people_in_zone = int(row.get('Людей_в_опасной_зоне', pop_int))
         intersect_area = float(row.get('Площадь_пересечения_м2', 0))
         incident_count = int(row.get('Кол_во_инцидентов', 1))
+        group_count = int(row.get('Кол_во_опасностей_в_группе', 1))
 
         if row['Старая_сирена'] == "ДА":
             report.append({"Район": row['Район'], "Н.П.": row['Населенный_пункт'], "Широта": row['lat_cluster'],
                            "Долгота": row['lon_cluster'], "Население": pop_int, "Тип угрозы": th,
                            "ТСО": "ОБОРУДОВАНО СТАРОЙ СИРЕНОЙ", "Канал": "Существующий", "Стоимость": 0,
-                           "Охват": pop_int, "Надежность": 1.0, "Людей_в_опасной_зоне": people_in_zone, "Площадь_пересечения_м2": intersect_area, "Кол_во_инцидентов": incident_count, "threat_radius_m": 400, "color": c})
+                           "Охват": pop_int, "Надежность": 1.0, "Людей_в_опасной_зоне": people_in_zone, "Площадь_пересечения_м2": intersect_area, "Кол_во_инцидентов": incident_count, "Кол_во_опасностей_в_группе": group_count, "threat_radius_m": 400, "color": c})
             continue
 
         winner_found = False
@@ -702,13 +837,13 @@ def run_optimization(df_zones, w_fire, w_flood, alpha, budget_large, budget_smal
                 report.append({"Район": row['Район'], "Н.П.": row['Населенный_пункт'], "Широта": row['lat_cluster'],
                                "Долгота": row['lon_cluster'], "Население": pop_int, "Тип угрозы": th,
                                "ТСО": equip['name'], "Канал": equip['ch'], "Стоимость": equip['cost'], "Охват": O_final,
-                               "Надежность": round(Q_report, 3), "Людей_в_опасной_зоне": people_in_zone, "Площадь_пересечения_м2": intersect_area, "Кол_во_инцидентов": incident_count, "threat_radius_m": 400, "color": c})
+                               "Надежность": round(Q_report, 3), "Людей_в_опасной_зоне": people_in_zone, "Площадь_пересечения_м2": intersect_area, "Кол_во_инцидентов": incident_count, "Кол_во_опасностей_в_группе": group_count, "threat_radius_m": 400, "color": c})
                 winner_found = True
 
         if not winner_found:
             report.append({"Район": row['Район'], "Н.П.": row['Населенный_пункт'], "Широта": row['lat_cluster'],
                            "Долгота": row['lon_cluster'], "Население": pop_int, "Тип угрозы": th, "ТСО": "ОТБРАКОВАНО",
-                           "Канал": "-", "Стоимость": 0, "Охват": 0, "Надежность": 0.0, "Людей_в_опасной_зоне": people_in_zone, "Площадь_пересечения_м2": intersect_area, "Кол_во_инцидентов": incident_count, "threat_radius_m": 400, "color": c})
+                           "Канал": "-", "Стоимость": 0, "Охват": 0, "Надежность": 0.0, "Людей_в_опасной_зоне": people_in_zone, "Площадь_пересечения_м2": intersect_area, "Кол_во_инцидентов": incident_count, "Кол_во_опасностей_в_группе": group_count, "threat_radius_m": 400, "color": c})
         # counts_geo = {}
 
         # for item in report:
@@ -913,7 +1048,7 @@ if data_result is not None:
                     "ScatterplotLayer",
                     data=old_tso_points,
                     get_position=["longitude", "latitude"],
-                    get_radius=600,
+                    get_radius=300,
                     get_fill_color=[50, 200, 50, 35],
                     get_line_color=[20, 160, 20, 255],
                     stroked=True,
