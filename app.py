@@ -748,6 +748,17 @@ def add_people_in_threat_zones_fast(df_threats, df_settlements):
     return df_threats
 # --- 3. ЖЕСТКАЯ МАТЕМАТИЧЕСКАЯ МОДЕЛЬ ---
 def run_optimization(df_zones, w_fire, w_flood, alpha, budget_large, budget_small, q_min, catalog_list):
+    """
+    ЖЕСТКАЯ МАТЕМАТИЧЕСКАЯ МОДЕЛЬ из пользовательского блока.
+
+    Важно:
+    - На вход подается уже усредненный слой опасностей: если несколько опасных зон
+      находятся в радиусе 500 м, они заранее объединены в одну расчетную зону.
+    - Для каждой такой усредненной зоны эта функция выбирает ровно одну новую ТСО
+      по исходной целевой функции PuLP.
+    - Население НЕ берется из старой матрицы. Оно уже рассчитано до вызова функции
+      как пересечение окружности опасности 400 м с зонами населенных пунктов.
+    """
     catalog = catalog_list
 
     def calc_q_dyn(equip, r_f, r_w, d2, d4, pop):
@@ -827,8 +838,7 @@ def run_optimization(df_zones, w_fire, w_flood, alpha, budget_large, budget_smal
 
     report = []
     for j, row in df_zones.iterrows():
-        th = "МУЛЬТИРИСК" if row['Индекс_Огня'] > 0.4 and row['Индекс_Воды'] > 0.4 else "ПОЖАР" if row['Индекс_Огня'] > \
-                                                                                                   row['Индекс_Воды'] else "ПАВОДОК"
+        th = "МУЛЬТИРИСК" if row['Индекс_Огня'] > 0.4 and row['Индекс_Воды'] > 0.4 else "ПОЖАР" if row['Индекс_Огня'] > row['Индекс_Воды'] else "ПАВОДОК"
         if th == "МУЛЬТИРИСК": c = [128, 0, 128, 200]
         elif th == "ПАВОДОК": c = [50, 100, 255, 200]
         else: c = [255, 50, 50, 200]
@@ -839,11 +849,26 @@ def run_optimization(df_zones, w_fire, w_flood, alpha, budget_large, budget_smal
         incident_count = int(row.get('Кол_во_инцидентов', 1))
         group_count = int(row.get('Кол_во_опасностей_в_группе', 1))
 
+        base_report = {
+            "Район": row['Район'],
+            "Н.П.": row['Населенный_пункт'],
+            "Широта": row['lat_cluster'],
+            "Долгота": row['lon_cluster'],
+            "Население": pop_int,
+            "Тип угрозы": th,
+            "Людей_в_опасной_зоне": people_in_zone,
+            "Площадь_пересечения_м2": intersect_area,
+            "Кол_во_инцидентов": incident_count,
+            "Кол_во_опасностей_в_группе": group_count,
+            "threat_radius_m": 400,
+            "color": c
+        }
+
         if row['Старая_сирена'] == "ДА":
-            report.append({"Район": row['Район'], "Н.П.": row['Населенный_пункт'], "Широта": row['lat_cluster'],
-                           "Долгота": row['lon_cluster'], "Население": pop_int, "Тип угрозы": th,
-                           "ТСО": "ОБОРУДОВАНО СТАРОЙ СИРЕНОЙ", "Канал": "Существующий", "Стоимость": 0,
-                           "Охват": pop_int, "Надежность": 1.0, "Людей_в_опасной_зоне": people_in_zone, "Площадь_пересечения_м2": intersect_area, "Кол_во_инцидентов": incident_count, "Кол_во_опасностей_в_группе": group_count, "threat_radius_m": 400, "color": c})
+            item = dict(base_report)
+            item.update({"ТСО": "ОБОРУДОВАНО СТАРОЙ СИРЕНОЙ", "Канал": "Существующий", "Стоимость": 0,
+                         "Охват": pop_int, "Надежность": 1.0})
+            report.append(item)
             continue
 
         winner_found = False
@@ -853,32 +878,19 @@ def run_optimization(df_zones, w_fire, w_flood, alpha, budget_large, budget_smal
                 Q_report = max(0.85, min(0.99, Q_report))
 
                 O_final = int(min(equip["cov"], pop_int) * equip["k_act"])
-                report.append({"Район": row['Район'], "Н.П.": row['Населенный_пункт'], "Широта": row['lat_cluster'],
-                               "Долгота": row['lon_cluster'], "Население": pop_int, "Тип угрозы": th,
-                               "ТСО": equip['name'], "Канал": equip['ch'], "Стоимость": equip['cost'], "Охват": O_final,
-                               "Надежность": round(Q_report, 3), "Людей_в_опасной_зоне": people_in_zone, "Площадь_пересечения_м2": intersect_area, "Кол_во_инцидентов": incident_count, "Кол_во_опасностей_в_группе": group_count, "threat_radius_m": 400, "color": c})
+                item = dict(base_report)
+                item.update({"ТСО": equip['name'], "Канал": equip['ch'], "Стоимость": equip['cost'], "Охват": O_final,
+                             "Надежность": round(Q_report, 3)})
+                report.append(item)
                 winner_found = True
 
         if not winner_found:
-            report.append({"Район": row['Район'], "Н.П.": row['Населенный_пункт'], "Широта": row['lat_cluster'],
-                           "Долгота": row['lon_cluster'], "Население": pop_int, "Тип угрозы": th, "ТСО": "ОТБРАКОВАНО",
-                           "Канал": "-", "Стоимость": 0, "Охват": 0, "Надежность": 0.0, "Людей_в_опасной_зоне": people_in_zone, "Площадь_пересечения_м2": intersect_area, "Кол_во_инцидентов": incident_count, "Кол_во_опасностей_в_группе": group_count, "threat_radius_m": 400, "color": c})
-        # counts_geo = {}
+            # Важно: зона все равно остается на карте, даже если население 0 или модель не нашла допустимую ТСО.
+            # Цвет сохраняется по типу угрозы, чтобы опасная зона не пропадала визуально.
+            item = dict(base_report)
+            item.update({"ТСО": "ОТБРАКОВАНО", "Канал": "-", "Стоимость": 0, "Охват": 0, "Надежность": 0.0})
+            report.append(item)
 
-        # for item in report:
-        #     np_name = item["Н.П."]
-            
-        #     if np_name in counts_geo:
-        #         counts_geo[np_name] += 1
-        #     else:
-        #         counts_geo[np_name] = 1
-        
-        # # Обновление населения прямо в исходном списке
-        # for item in report:
-        #     np_name = item["Н.П."]
-        #     item["Население"] = item["Население"] / counts_geo[np_name]
-        #     item["Охват"] = int(item["Охват"] / counts_geo[np_name])
-            
     final_obj = init_risk + (pulp.value(prob.objective) or 0)
     return pd.DataFrame(report), init_risk, final_obj
 
