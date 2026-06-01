@@ -124,11 +124,21 @@ def get_tatarstan_geojson():
 def load_data():
     try:
         df_matrix = pd.read_excel('СУПЕР_МАТРИЦА_ЭТАЛОН_ОБЪЕДИНЕННАЯ.xlsx')
-        df_matrix['lat_cluster'] = df_matrix['latitude'].round(2)
-        df_matrix['lon_cluster'] = df_matrix['longitude'].round(2)
+
+        # Старый файл теперь используется только как источник опасностей и координат.
+        # Население из него НЕ берем. Для отображения радиуса 400 м важно сохранять
+        # реальные координаты опасностей, а не укрупнять их округлением до 0.01/0.02 градуса.
+        df_matrix['latitude'] = pd.to_numeric(df_matrix['latitude'], errors='coerce')
+        df_matrix['longitude'] = pd.to_numeric(df_matrix['longitude'], errors='coerce')
+        df_matrix = df_matrix.dropna(subset=['latitude', 'longitude']).copy()
+        df_matrix['lat_cluster'] = df_matrix['latitude'].round(5)
+        df_matrix['lon_cluster'] = df_matrix['longitude'].round(5)
+        df_matrix['lat_key'] = df_matrix['latitude'].round(2)
+        df_matrix['lon_key'] = df_matrix['longitude'].round(2)
 
         df_zones = df_matrix.groupby(
-            ['Район', 'Населенный_пункт', 'lat_cluster', 'lon_cluster']
+            ['Район', 'Населенный_пункт', 'lat_cluster', 'lon_cluster', 'lat_key', 'lon_key'],
+            dropna=False
         ).agg({
             'acq_date': 'max',
             'latitude': 'count'
@@ -141,11 +151,11 @@ def load_data():
         df_zones.rename(columns={'Индекс_Риска_R': 'Индекс_Огня'}, inplace=True)
 
         df_flood = pd.read_excel('ТОП_РИСКИ_ПАВОДКОВ_ФИНАЛ.xlsx')
-        df_flood['lat_cluster'] = df_flood['latitude'].round(2)
-        df_flood['lon_cluster'] = df_flood['longitude'].round(2)
-        df_flood_cluster = df_flood.groupby(['Район', 'Населенный_пункт', 'lat_cluster', 'lon_cluster'])[
+        df_flood['lat_key'] = pd.to_numeric(df_flood['latitude'], errors='coerce').round(2)
+        df_flood['lon_key'] = pd.to_numeric(df_flood['longitude'], errors='coerce').round(2)
+        df_flood_cluster = df_flood.groupby(['Район', 'Населенный_пункт', 'lat_key', 'lon_key'])[
             'Индекс_Риска_F'].max().reset_index()
-        df_zones = pd.merge(df_zones, df_flood_cluster, on=['Район', 'Населенный_пункт', 'lat_cluster', 'lon_cluster'],
+        df_zones = pd.merge(df_zones, df_flood_cluster, on=['Район', 'Населенный_пункт', 'lat_key', 'lon_key'],
                             how='left')
         df_zones.rename(columns={'Индекс_Риска_F': 'Индекс_Воды'}, inplace=True)
 
@@ -251,7 +261,7 @@ def load_settlements():
 
             # Специальные правила
             if name == 'казань':
-                return 20000
+                return 30000
             if name == 'набережные челны':
                 return 7370
 
@@ -445,6 +455,31 @@ def add_population_to_threat_zones(df_zones, df_settlements):
     df_zones['Площадь_пересечения_м2'] = area_results
 
     return df_zones
+
+
+def build_threat_tooltip(df_res):
+    """Единый tooltip для всех опасных зон."""
+    df_res = df_res.copy()
+    for col in ['Людей_в_опасной_зоне', 'Площадь_пересечения_м2', 'Охват', 'Стоимость', 'Надежность']:
+        if col not in df_res.columns:
+            df_res[col] = 0
+    if 'threat_radius_m' not in df_res.columns:
+        df_res['threat_radius_m'] = 400
+
+    df_res['tooltip_html'] = (
+        "<b>" + df_res['Н.П.'].astype(str) + "</b> (" + df_res['Район'].astype(str) + ")<br/>"
+        "<b>Угроза:</b> " + df_res['Тип угрозы'].astype(str) + "<br/>"
+        "<b>Радиус опасной зоны:</b> 400 м<br/>"
+        "<b>Людей в опасной зоне:</b> " + df_res['Людей_в_опасной_зоне'].fillna(0).round(0).astype(int).astype(str) + " чел.<br/>"
+        "<b>Площадь пересечения с НП:</b> " + df_res['Площадь_пересечения_м2'].fillna(0).round(0).astype(int).astype(str) + " м²<br/>"
+        "<b>Выбрано:</b> " + df_res['ТСО'].astype(str) + " (" + df_res['Канал'].astype(str) + ")<br/>"
+        "<b>Стоимость:</b> " + df_res['Стоимость'].fillna(0).astype(str) + " у.е.<br/>"
+        "<b>Охват:</b> " + df_res['Охват'].fillna(0).astype(str) + " чел.<br/>"
+        "<b>Надежность:</b> " + df_res['Надежность'].fillna(0).astype(str)
+    )
+    return df_res
+
+
 @st.cache_data(show_spinner=False)
 def add_people_in_threat_zones_fast(df_threats, df_settlements):
     """
@@ -646,12 +681,15 @@ def run_optimization(df_zones, w_fire, w_flood, alpha, budget_large, budget_smal
         else: c = [255, 50, 50, 200]
         
         pop_int = int(row['Население'])
+        people_in_zone = int(row.get('Людей_в_опасной_зоне', pop_int))
+        intersect_area = float(row.get('Площадь_пересечения_м2', 0))
+        incident_count = int(row.get('Кол_во_инцидентов', 1))
 
         if row['Старая_сирена'] == "ДА":
             report.append({"Район": row['Район'], "Н.П.": row['Населенный_пункт'], "Широта": row['lat_cluster'],
                            "Долгота": row['lon_cluster'], "Население": pop_int, "Тип угрозы": th,
                            "ТСО": "ОБОРУДОВАНО СТАРОЙ СИРЕНОЙ", "Канал": "Существующий", "Стоимость": 0,
-                           "Охват": pop_int, "Надежность": 1.0, "color": [100, 100, 100, 150]})
+                           "Охват": pop_int, "Надежность": 1.0, "Людей_в_опасной_зоне": people_in_zone, "Площадь_пересечения_м2": intersect_area, "Кол_во_инцидентов": incident_count, "threat_radius_m": 400, "color": c})
             continue
 
         winner_found = False
@@ -664,13 +702,13 @@ def run_optimization(df_zones, w_fire, w_flood, alpha, budget_large, budget_smal
                 report.append({"Район": row['Район'], "Н.П.": row['Населенный_пункт'], "Широта": row['lat_cluster'],
                                "Долгота": row['lon_cluster'], "Население": pop_int, "Тип угрозы": th,
                                "ТСО": equip['name'], "Канал": equip['ch'], "Стоимость": equip['cost'], "Охват": O_final,
-                               "Надежность": round(Q_report, 3), "color": c})
+                               "Надежность": round(Q_report, 3), "Людей_в_опасной_зоне": people_in_zone, "Площадь_пересечения_м2": intersect_area, "Кол_во_инцидентов": incident_count, "threat_radius_m": 400, "color": c})
                 winner_found = True
 
         if not winner_found:
             report.append({"Район": row['Район'], "Н.П.": row['Населенный_пункт'], "Широта": row['lat_cluster'],
                            "Долгота": row['lon_cluster'], "Население": pop_int, "Тип угрозы": th, "ТСО": "ОТБРАКОВАНО",
-                           "Канал": "-", "Стоимость": 0, "Охват": 0, "Надежность": 0.0, "color": [50, 50, 50, 150]})
+                           "Канал": "-", "Стоимость": 0, "Охват": 0, "Надежность": 0.0, "Людей_в_опасной_зоне": people_in_zone, "Площадь_пересечения_м2": intersect_area, "Кол_во_инцидентов": incident_count, "threat_radius_m": 400, "color": c})
         # counts_geo = {}
 
         # for item in report:
@@ -687,7 +725,7 @@ def run_optimization(df_zones, w_fire, w_flood, alpha, budget_large, budget_smal
         #     item["Население"] = item["Население"] / counts_geo[np_name]
         #     item["Охват"] = int(item["Охват"] / counts_geo[np_name])
             
-    final_obj = init_risk + pulp.value(prob.objective)
+    final_obj = init_risk + (pulp.value(prob.objective) or 0)
     return pd.DataFrame(report), init_risk, final_obj
 
 
@@ -795,47 +833,31 @@ if data_result is not None:
         col3.metric("Общий бюджет (у.е.)", f"{df_res['Стоимость'].sum():,}")
         col4.metric("Снижение общего риска", f"{r_in:.2f} → {r_out:.2f}", f"-{(((r_in - r_out) / r_in * 100) if r_in > 0 else 0):.1f}%")
         
-        #СПЕЦИАЛЬНЫЙ ТЕКСТ ДЛЯ РАСЦО
-        df_res = df_res.copy()
-        if 'Людей_в_опасной_зоне' not in df_res.columns:
-            df_res['Людей_в_опасной_зоне'] = 0
-        
-        if 'Площадь_пересечения_м2' not in df_res.columns:
-            df_res['Площадь_пересечения_м2'] = 0
-        
-        df_res['threat_radius_m'] = 400
-        
-        df_res['tooltip_html'] = (
-            "<b>" + df_res['Н.П.'].astype(str) + "</b> (" + df_res['Район'].astype(str) + ")<br/>"
-            "<b>Угроза:</b> " + df_res['Тип угрозы'].astype(str) + "<br/>"
-            "<b>Радиус опасной зоны:</b> 400 м<br/>"
-            "<b>Людей в опасной зоне:</b> " + df_res['Людей_в_опасной_зоне'].fillna(0).round(0).astype(int).astype(str) + " чел.<br/>"
-            "<b>Площадь пересечения с НП:</b> " + df_res['Площадь_пересечения_м2'].fillna(0).round(0).astype(int).astype(str) + " м²<br/>"
-            "<b>Выбрано:</b> " + df_res['ТСО'].astype(str) + " (" + df_res['Канал'].astype(str) + ")<br/>"
-            "<b>Стоимость:</b> " + df_res['Стоимость'].astype(str) + " у.е.<br/>"
-            "<b>Охват:</b> " + df_res['Охват'].astype(str) + " чел.<br/>"
-            "<b>Надежность:</b> " + df_res['Надежность'].astype(str)
-        )
-        # Если радиуса угрозы еще нет — задаем его
-        df_res['threat_radius_m'] = 400
-        
-        # Считаем людей, попадающих в опасные зоны
-        df_res = add_people_in_threat_zones_fast(df_res, settlements_points)
+        # Tooltip и служебные поля для карты. Пересечения уже рассчитаны ДО оптимизации
+        # в data_result и перенесены в df_res внутри run_optimization.
+        df_res = build_threat_tooltip(df_res)
 
-        df_res['tooltip_html'] = (
-            "<b>" + df_res['Н.П.'].astype(str) + "</b> (" + df_res['Район'].astype(str) + ")<br/>"
-            "<b>Угроза:</b> " + df_res['Тип угрозы'].astype(str) + "<br/>"
-            "<b>Радиус опасной зоны:</b> 400 м<br/>"
-            "<b>Людей в опасной зоне:</b> " + df_res['Людей_в_опасной_зоне'].astype(int).astype(str) + " чел.<br/>"
-            "<b>Площадь пересечения с НП:</b> " + df_res['Площадь_пересечения_м2'].round(0).astype(int).astype(str) + " м²<br/>"
-            "<b>Выбрано:</b> " + df_res['ТСО'].astype(str) + " (" + df_res['Канал'].astype(str) + ")<br/>"
-            "<b>Стоимость:</b> " + df_res['Стоимость'].astype(str) + " у.е.<br/>"
-            "<b>Охват:</b> " + df_res['Охват'].astype(str) + " чел.<br/>"
-            "<b>Надежность:</b> " + df_res['Надежность'].astype(str)
-        )
         # КАРТА
         layers = []
-        # Зоны населенных пунктов по численности населения
+
+        # 1. Границы Татарстана — нижний слой
+        if boundary_data:
+            layers.append(
+                pdk.Layer(
+                    "GeoJsonLayer",
+                    boundary_data,
+                    opacity=0.3,
+                    stroked=True,
+                    filled=True,
+                    get_fill_color=[100, 150, 200, 20],
+                    get_line_color=[100, 100, 100, 150],
+                    line_width_min_pixels=1,
+                    pickable=False
+                )
+            )
+
+        # 2. Зоны населенных пунктов по численности населения.
+        # Они нужны как фон, поэтому pickable=False: это ускоряет карту и не мешает наведению на опасности/ТСО.
         if settlements_points is not None and not settlements_points.empty:
             layers.append(
                 pdk.Layer(
@@ -843,16 +865,16 @@ if data_result is not None:
                     data=settlements_points,
                     get_position=["lon_np", "lat_np"],
                     get_radius="radius_m",
-                    get_fill_color=[0, 120, 255, 40],
-                    get_line_color=[0, 80, 200, 180],
+                    get_fill_color=[0, 120, 255, 25],
+                    get_line_color=[0, 80, 200, 90],
                     stroked=True,
                     filled=True,
                     line_width_min_pixels=1,
-                    pickable=True
+                    pickable=False
                 )
             )
-        # Центры населенных пунктов
-        if settlements_points is not None and not settlements_points.empty:
+
+            # Центры населенных пунктов — маленькие синие точки с tooltip.
             layers.append(
                 pdk.Layer(
                     "ScatterplotLayer",
@@ -864,13 +886,12 @@ if data_result is not None:
                     filled=True
                 )
             )
-        if boundary_data:
-            layers.append(pdk.Layer("GeoJsonLayer", boundary_data, opacity=0.3, stroked=True, filled=True,
-                                    get_fill_color=[100, 150, 200, 20], get_line_color=[100, 100, 100, 150],
-                                    line_width_min_pixels=1))
+
+        # 3. Все зоны опасностей. Никакой фильтрации по населению/пересечению нет.
+        # Даже если людей в зоне 0, круг остается на карте и окрашен по типу угрозы.
         df_threats_map = df_res.copy()
         df_threats_map['threat_radius_m'] = 400
-        
+
         if not df_threats_map.empty:
             layers.append(
                 pdk.Layer(
@@ -878,21 +899,23 @@ if data_result is not None:
                     data=df_threats_map,
                     get_position=["Долгота", "Широта"],
                     get_color="color",
-                    get_radius=400,
+                    get_radius="threat_radius_m",
                     pickable=True,
                     filled=True
                 )
             )
 
+        # 4. Все существующие ТСО из Справочник_ТСО_ФИНАЛ.xlsx.
+        # Это отдельный слой отображения; он не исключает опасности из расчета.
         if old_tso_points is not None and not old_tso_points.empty:
             layers.append(
                 pdk.Layer(
                     "ScatterplotLayer",
                     data=old_tso_points,
                     get_position=["longitude", "latitude"],
-                    get_fill_color=[50, 200, 50, 180],
-                    get_line_color=[20, 120, 20, 255],
-                    get_radius=300,
+                    get_radius=600,
+                    get_fill_color=[50, 200, 50, 35],
+                    get_line_color=[20, 160, 20, 255],
                     stroked=True,
                     filled=True,
                     line_width_min_pixels=2,
