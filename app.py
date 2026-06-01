@@ -15,7 +15,7 @@ from docx.enum.text import WD_ALIGN_PARAGRAPH
 from io import BytesIO
 
 from shapely.geometry import Point
-from pyproj import Transformer
+# from pyproj import Transformer
 import math
 
 warnings.filterwarnings('ignore')
