@@ -177,7 +177,30 @@ def load_data():
     except Exception as e:
         st.error(f"Ошибка загрузки файлов: {e}")
         return None
+@st.cache_data
+def load_old_tso():
+    try:
+        df_old = pd.read_excel('Справочник_ТСО_ФИНАЛ.xlsx')
 
+        # Проверяем обязательные колонки
+        required_cols = ['latitude', 'longitude']
+        for col in required_cols:
+            if col not in df_old.columns:
+                st.warning(f"В файле Справочник_ТСО_ФИНАЛ.xlsx нет колонки: {col}")
+                return pd.DataFrame()
+
+        df_old = df_old.dropna(subset=['latitude', 'longitude']).copy()
+
+        # На всякий случай приводим координаты к числам
+        df_old['latitude'] = pd.to_numeric(df_old['latitude'], errors='coerce')
+        df_old['longitude'] = pd.to_numeric(df_old['longitude'], errors='coerce')
+        df_old = df_old.dropna(subset=['latitude', 'longitude'])
+
+        return df_old
+
+    except Exception as e:
+        st.warning(f"Не удалось загрузить Справочник_ТСО_ФИНАЛ.xlsx: {e}")
+        return pd.DataFrame()
 
 # --- 3. ЖЕСТКАЯ МАТЕМАТИЧЕСКАЯ МОДЕЛЬ ---
 def run_optimization(df_zones, w_fire, w_flood, alpha, budget_large, budget_small, q_min, catalog_list):
@@ -315,6 +338,7 @@ def run_optimization(df_zones, w_fire, w_flood, alpha, budget_large, budget_smal
 # --- ИНТЕРФЕЙС STREAMLIT ---
 boundary_data = get_tatarstan_geojson()
 data_result = load_data()
+old_tso_points = load_old_tso()
 
 if data_result is not None:
     # ===== ЛЕВАЯ ПАНЕЛЬ (SIDEBAR) =====
@@ -413,11 +437,21 @@ if data_result is not None:
         layers.append(pdk.Layer("ScatterplotLayer", data=df_res[df_res['ТСО'] != 'ОБОРУДОВАНО СТАРОЙ СИРЕНОЙ'],
                                 get_position=["Долгота", "Широта"], get_color="color", get_radius=400, pickable=True, filled=True))
 
-        df_old = df_res[df_res['ТСО'] == 'ОБОРУДОВАНО СТАРОЙ СИРЕНОЙ'].copy()
-        if not df_old.empty:
-            layers.append(pdk.Layer("ScatterplotLayer", data=df_old, get_position=["Долгота", "Широта"],
-                                    get_fill_color=[0, 0, 0, 0], get_line_color=[50, 200, 50, 255], get_radius=600,
-                                    stroked=True, line_width_min_pixels=3, pickable=True))
+        if old_tso_points is not None and not old_tso_points.empty:
+            layers.append(
+                pdk.Layer(
+                    "ScatterplotLayer",
+                    data=old_tso_points,
+                    get_position=["longitude", "latitude"],
+                    get_fill_color=[50, 200, 50, 180],
+                    get_line_color=[20, 120, 20, 255],
+                    get_radius=300,
+                    stroked=True,
+                    filled=True,
+                    line_width_min_pixels=2,
+                    pickable=True
+                )
+            )
 
         st.pydeck_chart(pdk.Deck(
             layers=layers,
