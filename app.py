@@ -197,7 +197,7 @@ def load_old_tso():
         # Название населенного пункта
         if 'Населенный_пункт' in df_old.columns:
             df_old['Н.П.'] = df_old['Населенный_пункт']
-        elif 'Н.П.' in df_old.columns:
+        elif 'Район' in df_old.columns:
             df_old['Н.П.'] = df_old['Район']
         else:
             df_old['Н.П.'] = 'Нет данных'
