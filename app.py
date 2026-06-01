@@ -134,6 +134,18 @@ def _first_non_empty_value(series, default=''):
         return default
 
 
+def _safe_max_date(series, default='Нет данных'):
+    """Безопасно возвращает максимальную дату из Series со смешанными типами."""
+    try:
+        dt = pd.to_datetime(series, errors='coerce')
+        dt = dt.dropna()
+        if dt.empty:
+            return default
+        return dt.max()
+    except Exception:
+        return default
+
+
 def aggregate_nearby_threat_zones(df_zones, radius_m=500):
     """
     Объединяет опасные зоны, центры которых находятся в радиусе radius_m друг от друга.
@@ -212,7 +224,7 @@ def aggregate_nearby_threat_zones(df_zones, radius_m=500):
             'lon_cluster': round(lon_mean, 6),
             'lat_key': round(lat_mean, 2),
             'lon_key': round(lon_mean, 2),
-            'acq_date': g['acq_date'].max() if 'acq_date' in g.columns else 'Нет данных',
+            'acq_date': _safe_max_date(g['acq_date']) if 'acq_date' in g.columns else 'Нет данных',
             'Кол_во_инцидентов': int(pd.to_numeric(g.get('Кол_во_инцидентов', 1), errors='coerce').fillna(1).sum()),
             'Кол_во_опасностей_в_группе': int(len(g)),
             'Старая_сирена': 'НЕТ'
@@ -256,14 +268,21 @@ def load_data():
         df_matrix['lat_key'] = df_matrix['latitude'].round(2)
         df_matrix['lon_key'] = df_matrix['longitude'].round(2)
 
+        # acq_date может быть смешанного типа (datetime/число/строка), поэтому сначала нормализуем.
+        if 'acq_date' in df_matrix.columns:
+            df_matrix['acq_date_safe'] = pd.to_datetime(df_matrix['acq_date'], errors='coerce')
+        else:
+            df_matrix['acq_date_safe'] = pd.NaT
+
         df_zones = df_matrix.groupby(
             ['Район', 'Населенный_пункт', 'lat_cluster', 'lon_cluster', 'lat_key', 'lon_key'],
             dropna=False
         ).agg({
-            'acq_date': 'max',
+            'acq_date_safe': 'max',
             'latitude': 'count'
         }).reset_index().rename(columns={
-            'latitude': 'Кол_во_инцидентов'
+            'latitude': 'Кол_во_инцидентов',
+            'acq_date_safe': 'acq_date'
         })
 
         df_fire = pd.read_excel('Риски_РТ_Для_QGIS.xlsx')
