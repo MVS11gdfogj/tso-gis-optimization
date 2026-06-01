@@ -175,12 +175,12 @@ def load_data():
         if missing_coords > 0:
             st.warning(f"Не найдены координаты населенных пунктов для {missing_coords} строк.")
 
-except Exception as e:
-    st.warning(f"Не удалось подключить координаты населенных пунктов: {e}")
-
-    # Если координаты НП не найдены, временно используем координаты риска
-    df_zones["lat_np"] = df_zones["lat_cluster"]
-    df_zones["lon_np"] = df_zones["lon_cluster"]
+    except Exception as e:
+        st.warning(f"Не удалось подключить координаты населенных пунктов: {e}")
+    
+        # Если координаты НП не найдены, временно используем координаты риска
+        df_zones["lat_np"] = df_zones["lat_cluster"]
+        df_zones["lon_np"] = df_zones["lon_cluster"]
 
         df_fire = pd.read_excel('Риски_РТ_Для_QGIS.xlsx')
         df_zones = pd.merge(df_zones, df_fire[['Район', 'Индекс_Риска_R']], on='Район', how='left')
