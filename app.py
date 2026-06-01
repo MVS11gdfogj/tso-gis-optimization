@@ -14,6 +14,10 @@ from docx.shared import Inches, Pt
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from io import BytesIO
 
+from shapely.geometry import Point
+from pyproj import Transformer
+import math
+
 warnings.filterwarnings('ignore')
 sns.set_theme(style="whitegrid")
 
@@ -282,11 +286,21 @@ def load_settlements():
                 return 20000
 
         df_np['radius_m'] = df_np.apply(calc_radius, axis=1)
+        # Площадь зоны населенного пункта, м²
+        df_np['area_m2'] = math.pi * (df_np['radius_m'] ** 2)
+        
+        # Население для расчета плотности
+        # Если население не найдено, считаем 0, потому что количество людей оценить невозможно
+        df_np['population_calc'] = df_np['population_osm'].fillna(0)
+        
+        # Человек на 1 м²
+        df_np['people_per_m2'] = df_np['population_calc'] / df_np['area_m2']
 
         df_np['tooltip_html'] = (
             "<b>" + df_np['Населенный_пункт_OSM'].astype(str) + "</b><br/>"
             "Население: " + df_np['population_osm'].fillna('не найдено').astype(str) + "<br/>"
-            "Радиус зоны: " + df_np['radius_m'].astype(str) + " м"
+            "Радиус зоны: " + df_np['radius_m'].astype(str) + " м<br/>"
+            "Плотность: " + df_np['people_per_m2'].round(6).astype(str) + " чел./м²"
         )
 
         return df_np
@@ -294,6 +308,92 @@ def load_settlements():
     except Exception as e:
         st.warning(f"Не удалось загрузить settlements_tatarstan_clean.csv: {e}")
         return pd.DataFrame()
+
+def add_people_in_threat_zones(df_threats, df_settlements):
+    """
+    Считает, сколько людей из зон населенных пунктов попадает
+    в каждую опасную зону.
+
+    df_threats — датафрейм опасных зон, например df_res.
+    df_settlements — датафрейм из settlements_tatarstan_clean.csv.
+    """
+
+    if df_threats is None or df_threats.empty:
+        return df_threats
+
+    if df_settlements is None or df_settlements.empty:
+        df_threats = df_threats.copy()
+        df_threats['Людей_в_опасной_зоне'] = 0
+        df_threats['Площадь_пересечения_м2'] = 0
+        return df_threats
+
+    df_threats = df_threats.copy()
+    df_settlements = df_settlements.copy()
+
+    # Проекция для Татарстана.
+    # EPSG:32639 — UTM zone 39N, метры.
+    transformer = Transformer.from_crs("EPSG:4326", "EPSG:32639", always_xy=True)
+
+    def make_circle(lon, lat, radius_m):
+        x, y = transformer.transform(float(lon), float(lat))
+        return Point(x, y).buffer(float(radius_m), resolution=48)
+
+    # Геометрии населенных пунктов
+    settlement_geoms = []
+
+    for _, row in df_settlements.iterrows():
+        if pd.isna(row['lat_np']) or pd.isna(row['lon_np']) or pd.isna(row['radius_m']):
+            continue
+
+        geom = make_circle(row['lon_np'], row['lat_np'], row['radius_m'])
+
+        settlement_geoms.append({
+            'name': row.get('Населенный_пункт_OSM', ''),
+            'geom': geom,
+            'people_per_m2': float(row.get('people_per_m2', 0)),
+            'population': float(row.get('population_calc', 0))
+        })
+
+    people_results = []
+    area_results = []
+
+    for _, threat in df_threats.iterrows():
+        # Радиус опасной зоны.
+        # Если у тебя уже есть отдельная колонка радиуса угрозы, используй ее.
+        # Например: threat_radius_m
+        threat_radius = threat.get('threat_radius_m', 400)
+
+        if pd.isna(threat['Широта']) or pd.isna(threat['Долгота']):
+            people_results.append(0)
+            area_results.append(0)
+            continue
+
+        threat_geom = make_circle(threat['Долгота'], threat['Широта'], threat_radius)
+
+        total_people = 0.0
+        total_intersection_area = 0.0
+
+        for settlement in settlement_geoms:
+            settlement_geom = settlement['geom']
+
+            if not threat_geom.intersects(settlement_geom):
+                continue
+
+            intersection = threat_geom.intersection(settlement_geom)
+            intersection_area = intersection.area
+
+            people_inside = intersection_area * settlement['people_per_m2']
+
+            total_intersection_area += intersection_area
+            total_people += people_inside
+
+        people_results.append(round(total_people))
+        area_results.append(round(total_intersection_area, 2))
+
+    df_threats['Людей_в_опасной_зоне'] = people_results
+    df_threats['Площадь_пересечения_м2'] = area_results
+
+    return df_threats
 # --- 3. ЖЕСТКАЯ МАТЕМАТИЧЕСКАЯ МОДЕЛЬ ---
 def run_optimization(df_zones, w_fire, w_flood, alpha, budget_large, budget_small, q_min, catalog_list):
     catalog = catalog_list
@@ -524,10 +624,24 @@ if data_result is not None:
         #СПЕЦИАЛЬНЫЙ ТЕКСТ ДЛЯ РАСЦО
         df_res = df_res.copy()
 
+        # Если радиуса угрозы еще нет — задаем его
+        if 'threat_radius_m' not in df_res.columns:
+            df_res['threat_radius_m'] = df_res['Тип угрозы'].map({
+                'ПОЖАР': 700,
+                'ПАВОДОК': 1000,
+                'МУЛЬТИРИСК': 1500
+            }).fillna(700)
+        
+        # Считаем людей, попадающих в опасные зоны
+        df_res = add_people_in_threat_zones(df_res, settlements_points)
+
         df_res['tooltip_html'] = (
             "<b>" + df_res['Н.П.'].astype(str) + "</b> (" + df_res['Район'].astype(str) + ")<br/>"
-            "<b>Население:</b> " + df_res['Население'].astype(str) + " чел.<br/>"
+            "<b>Население:</b> " + df_res['Население'].round(0).astype(int).astype(str) + " чел.<br/>"
             "<b>Угроза:</b> " + df_res['Тип угрозы'].astype(str) + "<br/>"
+            "<b>Радиус опасной зоны:</b> " + df_res['threat_radius_m'].round(0).astype(int).astype(str) + " м<br/>"
+            "<b>Людей в опасной зоне:</b> " + df_res['Людей_в_опасной_зоне'].round(0).astype(int).astype(str) + " чел.<br/>"
+            "<b>Площадь пересечения:</b> " + df_res['Площадь_пересечения_м2'].round(0).astype(int).astype(str) + " м²<br/>"
             "<b>Выбрано:</b> " + df_res['ТСО'].astype(str) + " (" + df_res['Канал'].astype(str) + ")<br/>"
             "<b>Стоимость:</b> " + df_res['Стоимость'].astype(str) + " у.е.<br/>"
             "<b>Охват:</b> " + df_res['Охват'].astype(str) + " чел.<br/>"
