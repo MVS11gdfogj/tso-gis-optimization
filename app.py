@@ -213,7 +213,87 @@ def load_old_tso():
     except Exception as e:
         st.warning(f"Не удалось загрузить Справочник_ТСО_ФИНАЛ.xlsx: {e}")
         return pd.DataFrame()
+@st.cache_data
+def load_settlements():
+    try:
+        # sep=None сам определит разделитель: запятая, ; или табуляция
+        df_np = pd.read_csv(
+            'settlements_tatarstan_clean.csv',
+            sep=None,
+            engine='python',
+            encoding='utf-8-sig'
+        )
 
+        required_cols = ['Район_OSM', 'Населенный_пункт_OSM', 'lat_np', 'lon_np', 'population_osm']
+        for col in required_cols:
+            if col not in df_np.columns:
+                st.warning(f"В файле settlements_tatarstan_clean.csv нет колонки: {col}")
+                return pd.DataFrame()
+
+        df_np = df_np.copy()
+
+        df_np['lat_np'] = pd.to_numeric(df_np['lat_np'], errors='coerce')
+        df_np['lon_np'] = pd.to_numeric(df_np['lon_np'], errors='coerce')
+        df_np['population_osm'] = pd.to_numeric(df_np['population_osm'], errors='coerce')
+
+        df_np = df_np.dropna(subset=['lat_np', 'lon_np'])
+
+        def calc_radius(row):
+            name = str(row['Населенный_пункт_OSM']).strip().lower()
+            pop = row['population_osm']
+
+            # Специальные правила
+            if name == 'казань':
+                return 30000
+            if name == 'набережные челны':
+                return 7370
+
+            # Если население не найдено
+            if pd.isna(pop):
+                return 700
+
+            pop = float(pop)
+
+            if pop <= 100:
+                return 200
+            elif pop <= 500:
+                return 500
+            elif pop <= 1500:
+                return 700
+            elif pop <= 5000:
+                return 900
+            elif pop <= 10000:
+                return 1400
+            elif pop <= 20000:
+                return 2000
+            elif pop <= 50000:
+                return 4000
+            elif pop <= 100000:
+                return 4500
+            elif pop <= 250000:
+                return 6000
+            elif pop <= 500000:
+                return 7000
+            elif pop <= 750000:
+                return 8000
+            elif pop <= 1000000:
+                return 12000
+            else:
+                return 20000
+
+        df_np['radius_m'] = df_np.apply(calc_radius, axis=1)
+
+        df_np['tooltip_html'] = (
+            "<b>" + df_np['Населенный_пункт_OSM'].astype(str) + "</b><br/>"
+            "Население: " + df_np['population_osm'].fillna('не найдено').astype(str) + "<br/>"
+            "Радиус зоны: " + df_np['radius_m'].astype(str) + " м"
+        )
+
+        return df_np
+
+    except Exception as e:
+        st.warning(f"Не удалось загрузить settlements_tatarstan_clean.csv: {e}")
+        return pd.DataFrame()
 # --- 3. ЖЕСТКАЯ МАТЕМАТИЧЕСКАЯ МОДЕЛЬ ---
 def run_optimization(df_zones, w_fire, w_flood, alpha, budget_large, budget_small, q_min, catalog_list):
     catalog = catalog_list
@@ -327,21 +407,21 @@ def run_optimization(df_zones, w_fire, w_flood, alpha, budget_large, budget_smal
             report.append({"Район": row['Район'], "Н.П.": row['Населенный_пункт'], "Широта": row['lat_cluster'],
                            "Долгота": row['lon_cluster'], "Население": pop_int, "Тип угрозы": th, "ТСО": "ОТБРАКОВАНО",
                            "Канал": "-", "Стоимость": 0, "Охват": 0, "Надежность": 0.0, "color": [50, 50, 50, 150]})
-        counts_geo = {}
+        # counts_geo = {}
 
-        for item in report:
-            np_name = item["Н.П."]
+        # for item in report:
+        #     np_name = item["Н.П."]
             
-            if np_name in counts_geo:
-                counts_geo[np_name] += 1
-            else:
-                counts_geo[np_name] = 1
+        #     if np_name in counts_geo:
+        #         counts_geo[np_name] += 1
+        #     else:
+        #         counts_geo[np_name] = 1
         
-        # Обновление населения прямо в исходном списке
-        for item in report:
-            np_name = item["Н.П."]
-            item["Население"] = item["Население"] / counts_geo[np_name]
-            item["Охват"] = int(item["Охват"] / counts_geo[np_name])
+        # # Обновление населения прямо в исходном списке
+        # for item in report:
+        #     np_name = item["Н.П."]
+        #     item["Население"] = item["Население"] / counts_geo[np_name]
+        #     item["Охват"] = int(item["Охват"] / counts_geo[np_name])
             
     final_obj = init_risk + pulp.value(prob.objective)
     return pd.DataFrame(report), init_risk, final_obj
@@ -351,6 +431,7 @@ def run_optimization(df_zones, w_fire, w_flood, alpha, budget_large, budget_smal
 boundary_data = get_tatarstan_geojson()
 data_result = load_data()
 old_tso_points = load_old_tso()
+settlements_points = load_settlements()
 
 if data_result is not None:
     # ===== ЛЕВАЯ ПАНЕЛЬ (SIDEBAR) =====
@@ -454,6 +535,35 @@ if data_result is not None:
         )
         # КАРТА
         layers = []
+        # Зоны населенных пунктов по численности населения
+        if settlements_points is not None and not settlements_points.empty:
+            layers.append(
+                pdk.Layer(
+                    "ScatterplotLayer",
+                    data=settlements_points,
+                    get_position=["lon_np", "lat_np"],
+                    get_radius="radius_m",
+                    get_fill_color=[0, 120, 255, 40],
+                    get_line_color=[0, 80, 200, 180],
+                    stroked=True,
+                    filled=True,
+                    line_width_min_pixels=1,
+                    pickable=True
+                )
+            )
+        # Центры населенных пунктов
+        if settlements_points is not None and not settlements_points.empty:
+            layers.append(
+                pdk.Layer(
+                    "ScatterplotLayer",
+                    data=settlements_points,
+                    get_position=["lon_np", "lat_np"],
+                    get_radius=80,
+                    get_fill_color=[0, 40, 180, 220],
+                    pickable=True,
+                    filled=True
+                )
+            )
         if boundary_data:
             layers.append(pdk.Layer("GeoJsonLayer", boundary_data, opacity=0.3, stroked=True, filled=True,
                                     get_fill_color=[100, 150, 200, 20], get_line_color=[100, 100, 100, 150],
