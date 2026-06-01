@@ -127,9 +127,14 @@ def load_data():
         df_matrix['lat_cluster'] = df_matrix['latitude'].round(2)
         df_matrix['lon_cluster'] = df_matrix['longitude'].round(2)
 
-        df_zones = df_matrix.groupby(['Район', 'Населенный_пункт', 'lat_cluster', 'lon_cluster']).agg({
-            'acq_date': 'max', 'latitude': 'count', 'Население': 'max'
-        }).reset_index().rename(columns={'latitude': 'Кол_во_инцидентов'})
+        df_zones = df_matrix.groupby(
+            ['Район', 'Населенный_пункт', 'lat_cluster', 'lon_cluster']
+        ).agg({
+            'acq_date': 'max',
+            'latitude': 'count'
+        }).reset_index().rename(columns={
+            'latitude': 'Кол_во_инцидентов'
+        })
 
         df_fire = pd.read_excel('Риски_РТ_Для_QGIS.xlsx')
         df_zones = pd.merge(df_zones, df_fire[['Район', 'Индекс_Риска_R']], on='Район', how='left')
@@ -173,7 +178,7 @@ def load_data():
         df_zones = df_zones.fillna({
             'Индекс_Огня': 0.0, 'Индекс_Воды': 0.0,
             'До_ближайшей_2G_вышки_км': 10.0, 'До_ближайшей_4G_вышки_км': 10.0, 'acq_date': 'Нет данных'
-        }).dropna(subset=['Население'])
+        })
 
         return df_zones
     except Exception as e:
@@ -286,12 +291,9 @@ def load_settlements():
         df_np['radius_m'] = df_np.apply(calc_radius, axis=1)
         # Площадь зоны населенного пункта, м²
         df_np['area_m2'] = math.pi * (df_np['radius_m'] ** 2)
-        
-        # Население для расчета плотности
-        # Если население не найдено, считаем 0, потому что количество людей оценить невозможно
+
         df_np['population_calc'] = df_np['population_osm'].fillna(0)
         
-        # Человек на 1 м²
         df_np['people_per_m2'] = df_np['population_calc'] / df_np['area_m2']
 
         df_np['tooltip_html'] = (
@@ -306,7 +308,143 @@ def load_settlements():
     except Exception as e:
         st.warning(f"Не удалось загрузить settlements_tatarstan_clean.csv: {e}")
         return pd.DataFrame()
+@st.cache_data(show_spinner=False)
+def add_population_to_threat_zones(df_zones, df_settlements):
+    """
+    Рассчитывает население, попадающее в каждую опасную зону.
+    Опасная зона всегда имеет радиус 400 м.
+    Население берется только из settlements_tatarstan_clean.csv.
+    """
 
+    if df_zones is None or df_zones.empty:
+        return df_zones
+
+    df_zones = df_zones.copy()
+    df_zones['threat_radius_m'] = 400
+
+    if df_settlements is None or df_settlements.empty:
+        df_zones['Население'] = 0
+        df_zones['Людей_в_опасной_зоне'] = 0
+        df_zones['Площадь_пересечения_м2'] = 0
+        return df_zones
+
+    df_settlements = df_settlements.copy()
+
+    # Приближенный перевод градусов в метры для Татарстана
+    lat0 = 55.5
+    meters_per_degree_lat = 111_320
+    meters_per_degree_lon = 111_320 * math.cos(math.radians(lat0))
+
+    def circle_intersection_area(r1, r2, d):
+        """
+        Площадь пересечения двух окружностей.
+        r1 — радиус опасной зоны, м
+        r2 — радиус зоны НП, м
+        d — расстояние между центрами, м
+        """
+
+        if d >= r1 + r2:
+            return 0.0
+
+        if d <= abs(r1 - r2):
+            return math.pi * min(r1, r2) ** 2
+
+        part1 = r1 ** 2 * math.acos(
+            (d ** 2 + r1 ** 2 - r2 ** 2) / (2 * d * r1)
+        )
+
+        part2 = r2 ** 2 * math.acos(
+            (d ** 2 + r2 ** 2 - r1 ** 2) / (2 * d * r2)
+        )
+
+        part3 = 0.5 * math.sqrt(
+            max(
+                0,
+                (-d + r1 + r2)
+                * (d + r1 - r2)
+                * (d - r1 + r2)
+                * (d + r1 + r2)
+            )
+        )
+
+        return part1 + part2 - part3
+
+    settlements_valid = df_settlements.dropna(
+        subset=['lat_np', 'lon_np', 'radius_m']
+    ).copy()
+
+    if settlements_valid.empty:
+        df_zones['Население'] = 0
+        df_zones['Людей_в_опасной_зоне'] = 0
+        df_zones['Площадь_пересечения_м2'] = 0
+        return df_zones
+
+    # Координаты НП в метрах
+    s_x = settlements_valid['lon_np'].astype(float).to_numpy() * meters_per_degree_lon
+    s_y = settlements_valid['lat_np'].astype(float).to_numpy() * meters_per_degree_lat
+    s_r = settlements_valid['radius_m'].astype(float).to_numpy()
+
+    # Плотность населения, чел./м²
+    s_density = settlements_valid['people_per_m2'].fillna(0).astype(float).to_numpy()
+
+    threat_radius = 400
+
+    population_results = []
+    area_results = []
+
+    for _, zone in df_zones.iterrows():
+        if pd.isna(zone['lat_cluster']) or pd.isna(zone['lon_cluster']):
+            population_results.append(0)
+            area_results.append(0)
+            continue
+
+        z_x = float(zone['lon_cluster']) * meters_per_degree_lon
+        z_y = float(zone['lat_cluster']) * meters_per_degree_lat
+
+        dx = s_x - z_x
+        dy = s_y - z_y
+        distances = np.sqrt(dx * dx + dy * dy)
+
+        # Берем только НП, окружности которых могут пересечься с угрозой 400 м
+        candidate_mask = distances <= (s_r + threat_radius)
+
+        if not np.any(candidate_mask):
+            population_results.append(0)
+            area_results.append(0)
+            continue
+
+        cand_distances = distances[candidate_mask]
+        cand_radii = s_r[candidate_mask]
+        cand_density = s_density[candidate_mask]
+
+        total_people = 0.0
+        total_area = 0.0
+
+        for d, settlement_radius, density in zip(
+            cand_distances,
+            cand_radii,
+            cand_density
+        ):
+            intersection_area = circle_intersection_area(
+                threat_radius,
+                settlement_radius,
+                d
+            )
+
+            if intersection_area <= 0:
+                continue
+
+            total_area += intersection_area
+            total_people += intersection_area * density
+
+        population_results.append(int(round(total_people)))
+        area_results.append(round(total_area, 2))
+
+    df_zones['Население'] = population_results
+    df_zones['Людей_в_опасной_зоне'] = population_results
+    df_zones['Площадь_пересечения_м2'] = area_results
+
+    return df_zones
 @st.cache_data(show_spinner=False)
 def add_people_in_threat_zones_fast(df_threats, df_settlements):
     """
@@ -555,9 +693,18 @@ def run_optimization(df_zones, w_fire, w_flood, alpha, budget_large, budget_smal
 
 # --- ИНТЕРФЕЙС STREAMLIT ---
 boundary_data = get_tatarstan_geojson()
-data_result = load_data()
-old_tso_points = load_old_tso()
+
 settlements_points = load_settlements()
+
+data_result_raw = load_data()
+
+if data_result_raw is not None:
+    data_result = add_population_to_threat_zones(
+        data_result_raw,
+        settlements_points
+    )
+else:
+    data_result = None
 
 if data_result is not None:
     # ===== ЛЕВАЯ ПАНЕЛЬ (SIDEBAR) =====
@@ -651,23 +798,17 @@ if data_result is not None:
         df_res = df_res.copy()
 
         # Если радиуса угрозы еще нет — задаем его
-        if 'threat_radius_m' not in df_res.columns:
-            df_res['threat_radius_m'] = df_res['Тип угрозы'].map({
-                'ПОЖАР': 700,
-                'ПАВОДОК': 1000,
-                'МУЛЬТИРИСК': 1500
-            }).fillna(700)
+        df_res['threat_radius_m'] = 400
         
         # Считаем людей, попадающих в опасные зоны
         df_res = add_people_in_threat_zones_fast(df_res, settlements_points)
 
         df_res['tooltip_html'] = (
             "<b>" + df_res['Н.П.'].astype(str) + "</b> (" + df_res['Район'].astype(str) + ")<br/>"
-            "<b>Население:</b> " + df_res['Население'].round(0).astype(int).astype(str) + " чел.<br/>"
             "<b>Угроза:</b> " + df_res['Тип угрозы'].astype(str) + "<br/>"
-            "<b>Радиус опасной зоны:</b> " + df_res['threat_radius_m'].round(0).astype(int).astype(str) + " м<br/>"
-            "<b>Людей в опасной зоне:</b> " + df_res['Людей_в_опасной_зоне'].round(0).astype(int).astype(str) + " чел.<br/>"
-            "<b>Площадь пересечения:</b> " + df_res['Площадь_пересечения_м2'].round(0).astype(int).astype(str) + " м²<br/>"
+            "<b>Радиус опасной зоны:</b> 400 м<br/>"
+            "<b>Людей в опасной зоне:</b> " + df_res['Людей_в_опасной_зоне'].astype(int).astype(str) + " чел.<br/>"
+            "<b>Площадь пересечения с НП:</b> " + df_res['Площадь_пересечения_м2'].round(0).astype(int).astype(str) + " м²<br/>"
             "<b>Выбрано:</b> " + df_res['ТСО'].astype(str) + " (" + df_res['Канал'].astype(str) + ")<br/>"
             "<b>Стоимость:</b> " + df_res['Стоимость'].astype(str) + " у.е.<br/>"
             "<b>Охват:</b> " + df_res['Охват'].astype(str) + " чел.<br/>"
