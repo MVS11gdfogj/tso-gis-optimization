@@ -158,29 +158,29 @@ def load_data():
             'acq_date': 'max', 'latitude': 'count', 'Население': 'max'
         }).reset_index().rename(columns={'latitude': 'Кол_во_инцидентов'})
         # --- ДОБАВЛЯЕМ КООРДИНАТЫ НАСЕЛЕННЫХ ПУНКТОВ ИЗ OSM ---
-  
-        df_settlements = pd.read_csv("settlements_tatarstan_clean.csv")
-    
-        df_zones["np_clean"] = df_zones["Населенный_пункт"].apply(clean_name)
-    
-        df_zones = pd.merge(
-            df_zones,
-            df_settlements[["np_clean", "lat_np", "lon_np", "Населенный_пункт_OSM", "place"]],
-            on="np_clean",
-            how="left"
-        )
-    
-        missing_coords = df_zones["lat_np"].isna().sum()
-    
-        if missing_coords > 0:
-            st.warning(f"Не найдены координаты населенных пунктов для {missing_coords} строк.")
-
-    except Exception as e:
-        st.warning(f"Не удалось подключить координаты населенных пунктов: {e}")
-    
-        # Если координаты НП не найдены, временно используем координаты риска
-        df_zones["lat_np"] = df_zones["lat_cluster"]
-        df_zones["lon_np"] = df_zones["lon_cluster"]
+        try:
+            df_settlements = pd.read_csv("settlements_tatarstan_clean.csv")
+        
+            df_zones["np_clean"] = df_zones["Населенный_пункт"].apply(clean_name)
+        
+            df_zones = pd.merge(
+                df_zones,
+                df_settlements[["np_clean", "lat_np", "lon_np", "Населенный_пункт_OSM", "place"]],
+                on="np_clean",
+                how="left"
+            )
+        
+            missing_coords = df_zones["lat_np"].isna().sum()
+        
+            if missing_coords > 0:
+                st.warning(f"Не найдены координаты населенных пунктов для {missing_coords} строк.")
+        
+        except Exception as e:
+            st.warning(f"Не удалось подключить координаты населенных пунктов: {e}")
+        
+            # Если координаты НП не найдены, временно используем координаты риска
+            df_zones["lat_np"] = df_zones["lat_cluster"]
+            df_zones["lon_np"] = df_zones["lon_cluster"]
 
         df_fire = pd.read_excel('Риски_РТ_Для_QGIS.xlsx')
         df_zones = pd.merge(df_zones, df_fire[['Район', 'Индекс_Риска_R']], on='Район', how='left')
@@ -227,9 +227,9 @@ def load_data():
         }).dropna(subset=['Население'])
 
         return df_zones
-    # except Exception as e:
-    #     st.error(f"Ошибка загрузки файлов: {e}")
-    #     return None
+    except Exception as e:
+        st.error(f"Ошибка загрузки файлов: {e}")
+        return None
 
 
 # --- 3. ЖЕСТКАЯ МАТЕМАТИЧЕСКАЯ МОДЕЛЬ ---
