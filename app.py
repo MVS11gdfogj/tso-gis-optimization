@@ -488,8 +488,14 @@ if data_result is not None:
 
         st.subheader("Реестр кластеров")
         st.dataframe(df_res, use_container_width=True)
-        csv = df_res.to_csv(index=False).encode('utf-8')
-        st.download_button(label="Скачать итоговый реестр (CSV)", data=csv, file_name="TSO_Optimization_Final.csv", mime="text/csv")
+        csv = df_res.to_csv(index=False, sep=';').encode('utf-8-sig')
+
+        st.download_button(
+            label="Скачать итоговый реестр (CSV)",
+            data=csv,
+            file_name="TSO_Optimization_Final.csv",
+            mime="text/csv; charset=utf-8-sig"
+        )
 
         # ==========================================
         # БЛОК ИИ-АНАЛИТИКИ
