@@ -182,7 +182,6 @@ def load_old_tso():
     try:
         df_old = pd.read_excel('Справочник_ТСО_ФИНАЛ.xlsx')
 
-        # Проверяем обязательные колонки
         required_cols = ['latitude', 'longitude']
         for col in required_cols:
             if col not in df_old.columns:
@@ -191,10 +190,23 @@ def load_old_tso():
 
         df_old = df_old.dropna(subset=['latitude', 'longitude']).copy()
 
-        # На всякий случай приводим координаты к числам
         df_old['latitude'] = pd.to_numeric(df_old['latitude'], errors='coerce')
         df_old['longitude'] = pd.to_numeric(df_old['longitude'], errors='coerce')
         df_old = df_old.dropna(subset=['latitude', 'longitude'])
+
+        # Название населенного пункта
+        if 'Населенный_пункт' in df_old.columns:
+            df_old['Н.П.'] = df_old['Населенный_пункт']
+        elif 'Н.П.' in df_old.columns:
+            df_old['Н.П.'] = df_old['Н.П.']
+        else:
+            df_old['Н.П.'] = 'Нет данных'
+
+        # Отдельная подсказка только для этих точек
+        df_old['tooltip_html'] = (
+            "<b>" + df_old['Н.П.'].astype(str) + "</b><br/>"
+            "РАСЦО РТ"
+        )
 
         return df_old
 
@@ -427,7 +439,19 @@ if data_result is not None:
         col2.metric("Установлено новых ТСО", len(df_res[~df_res['ТСО'].isin(['ОБОРУДОВАНО СТАРОЙ СИРЕНОЙ', 'ОТБРАКОВАНО'])]))
         col3.metric("Общий бюджет (у.е.)", f"{df_res['Стоимость'].sum():,}")
         col4.metric("Снижение общего риска", f"{r_in:.2f} → {r_out:.2f}", f"-{(((r_in - r_out) / r_in * 100) if r_in > 0 else 0):.1f}%")
+        
+        #СПЕЦИАЛЬНЫЙ ТЕКСТ ДЛЯ РАСЦО
+        df_res = df_res.copy()
 
+        df_res['tooltip_html'] = (
+            "<b>" + df_res['Н.П.'].astype(str) + "</b> (" + df_res['Район'].astype(str) + ")<br/>"
+            "<b>Население:</b> " + df_res['Население'].astype(str) + " чел.<br/>"
+            "<b>Угроза:</b> " + df_res['Тип угрозы'].astype(str) + "<br/>"
+            "<b>Выбрано:</b> " + df_res['ТСО'].astype(str) + " (" + df_res['Канал'].astype(str) + ")<br/>"
+            "<b>Стоимость:</b> " + df_res['Стоимость'].astype(str) + " у.е.<br/>"
+            "<b>Охват:</b> " + df_res['Охват'].astype(str) + " чел.<br/>"
+            "<b>Надежность:</b> " + df_res['Надежность'].astype(str)
+        )
         # КАРТА
         layers = []
         if boundary_data:
@@ -456,7 +480,10 @@ if data_result is not None:
         st.pydeck_chart(pdk.Deck(
             layers=layers,
             initial_view_state=pdk.ViewState(latitude=df_res['Широта'].mean(), longitude=df_res['Долгота'].mean(), zoom=6),
-            tooltip={"html": "<b>{Н.П.}</b> ({Район})<br/><b>Население:</b> {Население} чел.<br/><b>Угроза:</b> {Тип угрозы}<br/><b>Выбрано:</b> {ТСО} ({Канал})<br/><b>Стоимость:</b> {Стоимость} у.е.<br/><b>Охват:</b> {Охват} чел.<br/><b>Надежность:</b> {Надежность}"}
+            # tooltip={"html": "<b>{Н.П.}</b> ({Район})<br/><b>Население:</b> {Население} чел.<br/><b>Угроза:</b> {Тип угрозы}<br/><b>Выбрано:</b> {ТСО} ({Канал})<br/><b>Стоимость:</b> {Стоимость} у.е.<br/><b>Охват:</b> {Охват} чел.<br/><b>Надежность:</b> {Надежность}"}
+            tooltip={
+                "html": "{tooltip_html}"
+            }
         ))
 
         st.subheader("Реестр кластеров")
