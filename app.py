@@ -868,17 +868,21 @@ if data_result is not None:
             layers.append(pdk.Layer("GeoJsonLayer", boundary_data, opacity=0.3, stroked=True, filled=True,
                                     get_fill_color=[100, 150, 200, 20], get_line_color=[100, 100, 100, 150],
                                     line_width_min_pixels=1))
-        layers.append(
-            pdk.Layer(
-                "ScatterplotLayer",
-                data=df_threats_map,
-                get_position=["Долгота", "Широта"],
-                get_color="color",
-                get_radius=400,
-                pickable=True,
-                filled=True
+        df_threats_map = df_res.copy()
+        df_threats_map['threat_radius_m'] = 400
+        
+        if not df_threats_map.empty:
+            layers.append(
+                pdk.Layer(
+                    "ScatterplotLayer",
+                    data=df_threats_map,
+                    get_position=["Долгота", "Широта"],
+                    get_color="color",
+                    get_radius=400,
+                    pickable=True,
+                    filled=True
+                )
             )
-        )
 
         if old_tso_points is not None and not old_tso_points.empty:
             layers.append(
