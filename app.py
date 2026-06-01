@@ -649,6 +649,7 @@ def build_threat_tooltip(df_res):
         "<b>Количество инцидентов:</b> " + df_res['Кол_во_инцидентов'].fillna(1).round(0).astype(int).astype(str) + "<br/>"
         "<b>Людей в опасной зоне:</b> " + df_res['Людей_в_опасной_зоне'].fillna(0).round(0).astype(int).astype(str) + " чел.<br/>"
         "<b>Площадь пересечения с НП:</b> " + df_res['Площадь_пересечения_м2'].fillna(0).round(0).astype(int).astype(str) + " м²<br/>"
+        "<b>Примечание:</b> ТСО рекомендуется для каждой зоны; если население не найдено, подбор выполняется по минимальной расчетной базе 50 чел.<br/>"
         "<b>Рекомендованное ТСО:</b> " + df_res['Рекомендация_ТСО_текст'].astype(str) + "<br/>"
         "<b>Стоимость:</b> " + df_res['Стоимость'].fillna(0).astype(str) + " у.е.<br/>"
         "<b>Расчетный охват:</b> " + df_res['Охват'].fillna(0).astype(str) + " чел.<br/>"
@@ -777,10 +778,12 @@ def run_optimization(df_zones, w_fire, w_flood, alpha, budget_large, budget_smal
     Важно:
     - На вход подается уже усредненный слой опасностей: если несколько опасных зон
       находятся в радиусе 500 м, они заранее объединены в одну расчетную зону.
-    - Для каждой такой усредненной зоны эта функция выбирает ровно одну новую ТСО
+    - Для каждой такой усредненной зоны эта функция подбирает рекомендованное ТСО
       по исходной целевой функции PuLP.
-    - Население НЕ берется из старой матрицы. Оно уже рассчитано до вызова функции
-      как пересечение окружности опасности 400 м с зонами населенных пунктов.
+    - Рекомендация рассчитывается для ВСЕХ опасных зон. Даже если население по
+      пересечению с населенными пунктами равно 0, зона не отбраковывается:
+      для выбора используется расчетное минимальное население pop_model=50,
+      а в отчете сохраняется реальное население/охват.
     """
     catalog = catalog_list
 
@@ -789,31 +792,35 @@ def run_optimization(df_zones, w_fire, w_flood, alpha, budget_large, budget_smal
         name = equip["name"]
         ch = equip["ch"]
 
-        if pop < 50: return 0.0
+        # ВАЖНО: ТСО нужно рекомендовать во всех опасных зонах.
+        # Поэтому население меньше 50 не обнуляет Q, а используется только
+        # как фактор выбора. Для правил подбора берем минимальную расчетную
+        # базу 50 человек, но фактическое население/охват в отчете не меняем.
+        pop_model = max(float(pop or 0), 50.0)
 
         boost = 0.0
-        if name == "ТВ-системы" and ch == "Спутник" and pop >= 50000: boost = 10.0
-        elif name == "ТВ-системы" and ch == "ТВ/радио" and 20000 <= pop < 50000: boost = 10.0
-        elif name == "Речевые уст." and ch == "Проводной" and 10000 <= pop < 20000: boost = 10.0
-        elif name == "Речевые уст." and ch == "IP" and 5000 <= pop < 10000: boost = 10.0
-        elif name == "Речевые уст." and ch == "Сотовая" and 3000 <= pop < 5000: boost = 10.0
+        if name == "ТВ-системы" and ch == "Спутник" and pop_model >= 50000: boost = 10.0
+        elif name == "ТВ-системы" and ch == "ТВ/радио" and 20000 <= pop_model < 50000: boost = 10.0
+        elif name == "Речевые уст." and ch == "Проводной" and 10000 <= pop_model < 20000: boost = 10.0
+        elif name == "Речевые уст." and ch == "IP" and 5000 <= pop_model < 10000: boost = 10.0
+        elif name == "Речевые уст." and ch == "Сотовая" and 3000 <= pop_model < 5000: boost = 10.0
         elif name == "БАС (Дроны)" and ch == "Спутник" and r_f > 0.80 and d2 > 8.0: boost = 10.0
         elif name == "БАС (Дроны)" and ch == "Сотовая" and r_f > 0.80 and d2 <= 8.0: boost = 10.0
-        elif name == "Мобильные комп." and ch == "Спутник" and r_w > 0.80 and d2 > 8.0 and pop > 500: boost = 10.0
-        elif name == "Мобильные комп." and ch == "Сотовая" and r_w > 0.80 and d2 <= 8.0 and pop > 500: boost = 10.0
+        elif name == "Мобильные комп." and ch == "Спутник" and r_w > 0.80 and d2 > 8.0 and pop_model > 500: boost = 10.0
+        elif name == "Мобильные комп." and ch == "Сотовая" and r_w > 0.80 and d2 <= 8.0 and pop_model > 500: boost = 10.0
 
         if boost == 0.0:
             if "Моб. приложения" in name:
                 if ch == "IP" and d4 <= 3.0: boost = 8.0
                 elif ch == "Сотовая" and 3.0 < d4 <= 8.0: boost = 8.0
-                elif ch == "Сотовая" and d4 > 8.0 and pop % 3 == 0: boost = 8.0
+                elif ch == "Сотовая" and d4 > 8.0 and int(pop_model) % 3 == 0: boost = 8.0
             elif name == "SMS-оповещение" and ch == "Сотовая":
-                if d4 > 8.0 and pop % 3 == 1: boost = 8.0
+                if d4 > 8.0 and int(pop_model) % 3 == 1: boost = 8.0
             elif "Радиовещание" in name:
-                if d4 > 8.0 and pop % 3 == 2:
-                    if ch == "Радио" and pop < 1000: boost = 8.0
-                    elif ch == "ТВ/радио" and 1000 <= pop < 3000: boost = 8.0
-                    elif ch == "Спутник" and pop >= 3000: boost = 8.0
+                if d4 > 8.0 and int(pop_model) % 3 == 2:
+                    if ch == "Радио" and pop_model < 1000: boost = 8.0
+                    elif ch == "ТВ/радио" and 1000 <= pop_model < 3000: boost = 8.0
+                    elif ch == "Спутник" and pop_model >= 3000: boost = 8.0
             elif "Моб. приложения" in name and ch == "Сотовая":
                 boost = 2.0
 
@@ -834,20 +841,29 @@ def run_optimization(df_zones, w_fire, w_flood, alpha, budget_large, budget_smal
                 prob += v == 0
             continue
 
-        curr_b = budget_small if row['Население'] <= 500 else budget_large
+        pop_real = float(row.get('Население', 0) or 0)
+        # Для подбора рекомендации используем минимум 50 человек, чтобы зоны
+        # без найденного населения не отбраковывались. Реальный охват ниже
+        # по-прежнему считается от pop_real.
+        pop_model = max(pop_real, 50.0)
+
+        curr_b = budget_small if pop_model <= 500 else budget_large
         valid_keys = []
 
         for k, equip in enumerate(catalog):
             v = pulp.LpVariable(f"z_{j}_{k}", cat=pulp.LpBinary)
             vars_dict[j][k] = v
             Q = calc_q_dyn(equip, row['Индекс_Огня'], row['Индекс_Воды'], row['До_ближайшей_2G_вышки_км'],
-                           row['До_ближайшей_4G_вышки_км'], row['Население'])
+                           row['До_ближайшей_4G_вышки_км'], pop_model)
 
             if equip["cost"] <= curr_b and Q >= q_min:
                 valid_keys.append(k)
-                O = min(equip["cov"], row['Население']) * equip["k_act"]
+                # Оценочный охват для целевой функции: если фактическое население
+                # равно 0, используем pop_model только для выбора подходящего ТСО.
+                # В отчете фактический охват останется 0.
+                O_model = min(equip["cov"], pop_model) * equip["k_act"]
                 tf = max(0.1, (3600 - equip["time"]) / 3600.0)
-                red = (Q * O * tf) / (row['Население'] * alpha + 1)
+                red = (Q * O_model * tf) / (pop_model * alpha + 1)
                 obj_terms.append(-R_base * red * v)
             else:
                 prob += v == 0
@@ -878,6 +894,7 @@ def run_optimization(df_zones, w_fire, w_flood, alpha, budget_large, budget_smal
             "Широта": row['lat_cluster'],
             "Долгота": row['lon_cluster'],
             "Население": pop_int,
+            "Население_для_подбора_ТСО": max(pop_int, 50),
             "Тип угрозы": th,
             "Людей_в_опасной_зоне": people_in_zone,
             "Площадь_пересечения_м2": intersect_area,
@@ -1040,7 +1057,7 @@ if data_result is not None:
 
         col1, col2, col3, col4 = st.columns(4)
         col1.metric("Всего кластеров", len(df_res))
-        col2.metric("Зон с рекомендацией ТСО", len(df_res[~df_res['ТСО'].isin(['ОБОРУДОВАНО СТАРОЙ СИРЕНОЙ', 'ОТБРАКОВАНО'])]))
+        col2.metric("Зон с рекомендацией ТСО", len(df_res[~df_res['Рекомендованное_ТСО'].isin(['ОБОРУДОВАНО СТАРОЙ СИРЕНОЙ', 'ОТБРАКОВАНО'])]))
         col3.metric("Общий бюджет (у.е.)", f"{df_res['Стоимость'].sum():,}")
         col4.metric("Снижение общего риска", f"{r_in:.2f} → {r_out:.2f}", f"-{(((r_in - r_out) / r_in * 100) if r_in > 0 else 0):.1f}%")
         
