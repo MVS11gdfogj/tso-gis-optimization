@@ -601,8 +601,13 @@ def add_population_to_threat_zones(df_zones, df_settlements):
 
 
 def build_threat_tooltip(df_res):
-    """Единый tooltip для всех опасных зон."""
+    """Единый tooltip для всех опасных зон.
+
+    Важно: рекомендованное ТСО выводится только в описании опасной зоны
+    и в реестре. Отдельные новые точки ТСО на карте не создаются.
+    """
     df_res = df_res.copy()
+
     for col in ['Людей_в_опасной_зоне', 'Площадь_пересечения_м2', 'Охват', 'Стоимость', 'Надежность']:
         if col not in df_res.columns:
             df_res[col] = 0
@@ -613,11 +618,30 @@ def build_threat_tooltip(df_res):
     if 'Кол_во_инцидентов' not in df_res.columns:
         df_res['Кол_во_инцидентов'] = 1
 
+    # Совместимость со старой структурой: модель возвращает ТСО/Канал,
+    # а пользовательский интерфейс показывает их именно как рекомендации.
+    if 'Рекомендованное_ТСО' not in df_res.columns:
+        df_res['Рекомендованное_ТСО'] = df_res.get('ТСО', 'ОТБРАКОВАНО')
+    if 'Рекомендованный_канал' not in df_res.columns:
+        df_res['Рекомендованный_канал'] = df_res.get('Канал', '-')
+
+    rec_tso = df_res['Рекомендованное_ТСО'].fillna('ОТБРАКОВАНО').astype(str)
+    rec_channel = df_res['Рекомендованный_канал'].fillna('-').astype(str)
+
+    # Для зон, где модель не нашла допустимое оборудование, показываем понятное описание.
+    rec_text = np.where(
+        rec_tso.isin(['ОТБРАКОВАНО', 'nan', 'None', '']),
+        'нет допустимого варианта по ограничениям',
+        rec_tso + ' (' + rec_channel + ')'
+    )
+    df_res['Рекомендация_ТСО_текст'] = rec_text
+
     lat_text = pd.to_numeric(df_res['Широта'], errors='coerce').round(6).astype(str)
     lon_text = pd.to_numeric(df_res['Долгота'], errors='coerce').round(6).astype(str)
 
     df_res['tooltip_html'] = (
-        "<b>" + df_res['Н.П.'].astype(str) + "</b> (" + df_res['Район'].astype(str) + ")<br/>"
+        "<b>Опасная зона</b><br/>"
+        "<b>Н.П.:</b> " + df_res['Н.П.'].astype(str) + " (" + df_res['Район'].astype(str) + ")<br/>"
         "<b>Координаты:</b> " + lat_text + ", " + lon_text + "<br/>"
         "<b>Угроза:</b> " + df_res['Тип угрозы'].astype(str) + "<br/>"
         "<b>Радиус опасной зоны:</b> 400 м<br/>"
@@ -625,13 +649,12 @@ def build_threat_tooltip(df_res):
         "<b>Количество инцидентов:</b> " + df_res['Кол_во_инцидентов'].fillna(1).round(0).astype(int).astype(str) + "<br/>"
         "<b>Людей в опасной зоне:</b> " + df_res['Людей_в_опасной_зоне'].fillna(0).round(0).astype(int).astype(str) + " чел.<br/>"
         "<b>Площадь пересечения с НП:</b> " + df_res['Площадь_пересечения_м2'].fillna(0).round(0).astype(int).astype(str) + " м²<br/>"
-        "<b>Выбрано:</b> " + df_res['ТСО'].astype(str) + " (" + df_res['Канал'].astype(str) + ")<br/>"
+        "<b>Рекомендованное ТСО:</b> " + df_res['Рекомендация_ТСО_текст'].astype(str) + "<br/>"
         "<b>Стоимость:</b> " + df_res['Стоимость'].fillna(0).astype(str) + " у.е.<br/>"
-        "<b>Охват:</b> " + df_res['Охват'].fillna(0).astype(str) + " чел.<br/>"
-        "<b>Надежность:</b> " + df_res['Надежность'].fillna(0).astype(str)
+        "<b>Расчетный охват:</b> " + df_res['Охват'].fillna(0).astype(str) + " чел.<br/>"
+        "<b>Расчетная надежность:</b> " + df_res['Надежность'].fillna(0).astype(str)
     )
     return df_res
-
 
 @st.cache_data(show_spinner=False)
 def add_people_in_threat_zones_fast(df_threats, df_settlements):
@@ -866,8 +889,15 @@ def run_optimization(df_zones, w_fire, w_flood, alpha, budget_large, budget_smal
 
         if row['Старая_сирена'] == "ДА":
             item = dict(base_report)
-            item.update({"ТСО": "ОБОРУДОВАНО СТАРОЙ СИРЕНОЙ", "Канал": "Существующий", "Стоимость": 0,
-                         "Охват": pop_int, "Надежность": 1.0})
+            item.update({
+                "ТСО": "ОБОРУДОВАНО СТАРОЙ СИРЕНОЙ",
+                "Канал": "Существующий",
+                "Рекомендованное_ТСО": "ОБОРУДОВАНО СТАРОЙ СИРЕНОЙ",
+                "Рекомендованный_канал": "Существующий",
+                "Стоимость": 0,
+                "Охват": pop_int,
+                "Надежность": 1.0
+            })
             report.append(item)
             continue
 
@@ -879,8 +909,15 @@ def run_optimization(df_zones, w_fire, w_flood, alpha, budget_large, budget_smal
 
                 O_final = int(min(equip["cov"], pop_int) * equip["k_act"])
                 item = dict(base_report)
-                item.update({"ТСО": equip['name'], "Канал": equip['ch'], "Стоимость": equip['cost'], "Охват": O_final,
-                             "Надежность": round(Q_report, 3)})
+                item.update({
+                    "ТСО": equip['name'],
+                    "Канал": equip['ch'],
+                    "Рекомендованное_ТСО": equip['name'],
+                    "Рекомендованный_канал": equip['ch'],
+                    "Стоимость": equip['cost'],
+                    "Охват": O_final,
+                    "Надежность": round(Q_report, 3)
+                })
                 report.append(item)
                 winner_found = True
 
@@ -888,7 +925,15 @@ def run_optimization(df_zones, w_fire, w_flood, alpha, budget_large, budget_smal
             # Важно: зона все равно остается на карте, даже если население 0 или модель не нашла допустимую ТСО.
             # Цвет сохраняется по типу угрозы, чтобы опасная зона не пропадала визуально.
             item = dict(base_report)
-            item.update({"ТСО": "ОТБРАКОВАНО", "Канал": "-", "Стоимость": 0, "Охват": 0, "Надежность": 0.0})
+            item.update({
+                "ТСО": "ОТБРАКОВАНО",
+                "Канал": "-",
+                "Рекомендованное_ТСО": "ОТБРАКОВАНО",
+                "Рекомендованный_канал": "-",
+                "Стоимость": 0,
+                "Охват": 0,
+                "Надежность": 0.0
+            })
             report.append(item)
 
     final_obj = init_risk + (pulp.value(prob.objective) or 0)
@@ -995,7 +1040,7 @@ if data_result is not None:
 
         col1, col2, col3, col4 = st.columns(4)
         col1.metric("Всего кластеров", len(df_res))
-        col2.metric("Установлено новых ТСО", len(df_res[~df_res['ТСО'].isin(['ОБОРУДОВАНО СТАРОЙ СИРЕНОЙ', 'ОТБРАКОВАНО'])]))
+        col2.metric("Зон с рекомендацией ТСО", len(df_res[~df_res['ТСО'].isin(['ОБОРУДОВАНО СТАРОЙ СИРЕНОЙ', 'ОТБРАКОВАНО'])]))
         col3.metric("Общий бюджет (у.е.)", f"{df_res['Стоимость'].sum():,}")
         col4.metric("Снижение общего риска", f"{r_in:.2f} → {r_out:.2f}", f"-{(((r_in - r_out) / r_in * 100) if r_in > 0 else 0):.1f}%")
         
