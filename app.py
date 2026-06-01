@@ -852,21 +852,21 @@ if data_result is not None:
         layers.append(pdk.Layer("ScatterplotLayer", data=df_res[df_res['ТСО'] != 'ОБОРУДОВАНО СТАРОЙ СИРЕНОЙ'],
                                 get_position=["Долгота", "Широта"], get_color="color", get_radius=400, pickable=True, filled=True))
 
-        if old_tso_points is not None and not old_tso_points.empty:
-            layers.append(
-                pdk.Layer(
-                    "ScatterplotLayer",
-                    data=old_tso_points,
-                    get_position=["longitude", "latitude"],
-                    get_fill_color=[50, 200, 50, 180],
-                    get_line_color=[20, 120, 20, 255],
-                    get_radius=300,
-                    stroked=True,
-                    filled=True,
-                    line_width_min_pixels=2,
-                    pickable=True
-                )
-            )
+        # if old_tso_points is not None and not old_tso_points.empty:
+        #     layers.append(
+        #         pdk.Layer(
+        #             "ScatterplotLayer",
+        #             data=old_tso_points,
+        #             get_position=["longitude", "latitude"],
+        #             get_fill_color=[50, 200, 50, 180],
+        #             get_line_color=[20, 120, 20, 255],
+        #             get_radius=300,
+        #             stroked=True,
+        #             filled=True,
+        #             line_width_min_pixels=2,
+        #             pickable=True
+        #         )
+        #     )
 
         st.pydeck_chart(pdk.Deck(
             layers=layers,
