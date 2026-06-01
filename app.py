@@ -227,9 +227,9 @@ def load_data():
         }).dropna(subset=['Население'])
 
         return df_zones
-    except Exception as e:
-        st.error(f"Ошибка загрузки файлов: {e}")
-        return None
+    # except Exception as e:
+    #     st.error(f"Ошибка загрузки файлов: {e}")
+    #     return None
 
 
 # --- 3. ЖЕСТКАЯ МАТЕМАТИЧЕСКАЯ МОДЕЛЬ ---
