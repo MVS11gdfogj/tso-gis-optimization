@@ -1151,14 +1151,21 @@ if data_result is not None:
                 )
             )
 
-        st.pydeck_chart(pdk.Deck(
-            layers=layers,
-            initial_view_state=pdk.ViewState(latitude=df_res['Широта'].mean(), longitude=df_res['Долгота'].mean(), zoom=6),
-            # tooltip={"html": "<b>{Н.П.}</b> ({Район})<br/><b>Население:</b> {Население} чел.<br/><b>Угроза:</b> {Тип угрозы}<br/><b>Выбрано:</b> {ТСО} ({Канал})<br/><b>Стоимость:</b> {Стоимость} у.е.<br/><b>Охват:</b> {Охват} чел.<br/><b>Надежность:</b> {Надежность}"}
-            tooltip={
-                "html": "{tooltip_html}"
-            }
-        ))
+ st.pydeck_chart(
+    pdk.Deck(
+        layers=layers,
+        initial_view_state=pdk.ViewState(
+            latitude=df_res['Широта'].mean(),
+            longitude=df_res['Долгота'].mean(),
+            zoom=6
+        ),
+        tooltip={
+            "html": "{tooltip_html}"
+        }
+    ),
+    use_container_width=True,
+    height=900
+)
 
         st.subheader("Реестр кластеров")
         st.dataframe(df_res, use_container_width=True)
