@@ -1151,7 +1151,7 @@ if data_result is not None:
                 )
             )
 
-         st.pydeck_chart(
+        st.pydeck_chart(
             pdk.Deck(
                 layers=layers,
                 initial_view_state=pdk.ViewState(
