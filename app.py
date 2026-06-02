@@ -1151,21 +1151,21 @@ if data_result is not None:
                 )
             )
 
- st.pydeck_chart(
-    pdk.Deck(
-        layers=layers,
-        initial_view_state=pdk.ViewState(
-            latitude=df_res['Широта'].mean(),
-            longitude=df_res['Долгота'].mean(),
-            zoom=6
-        ),
-        tooltip={
-            "html": "{tooltip_html}"
-        }
-    ),
-    use_container_width=True,
-    height=900
-)
+         st.pydeck_chart(
+            pdk.Deck(
+                layers=layers,
+                initial_view_state=pdk.ViewState(
+                    latitude=df_res['Широта'].mean(),
+                    longitude=df_res['Долгота'].mean(),
+                    zoom=6
+                ),
+                tooltip={
+                    "html": "{tooltip_html}"
+                }
+            ),
+            use_container_width=True,
+            height=900
+        )
 
         st.subheader("Реестр кластеров")
         st.dataframe(df_res, use_container_width=True)
