@@ -1015,9 +1015,9 @@ if data_result is not None:
         'k_act': new_k_act
     })
 
-    if st.sidebar.button("Сбросить данные к заводским", use_container_width=True):
-        st.session_state.catalog = [dict(item) for item in DEFAULT_CATALOG]
-        st.rerun()
+    #if st.sidebar.button("Сбросить данные к заводским", use_container_width=True):
+    #   st.session_state.catalog = [dict(item) for item in DEFAULT_CATALOG]
+    #    st.rerun()
 
     # ===== ОСНОВНАЯ ОБЛАСТЬ ЭКРАНА =====
     st.subheader("Технологические ограничения структуры каналов связи")
