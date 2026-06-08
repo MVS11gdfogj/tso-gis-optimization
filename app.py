@@ -20,7 +20,7 @@ warnings.filterwarnings('ignore')
 sns.set_theme(style="whitegrid")
 
 # --- НАСТРОЙКА СТРАНИЦЫ ---
-st.set_page_config(page_title="ГИС Оптимизация ТСО v5.4", layout="wide")
+st.set_page_config(page_title="ГИС Оптимизация ТСО v5.5", layout="wide")
 st.markdown(
     """
     <style>
