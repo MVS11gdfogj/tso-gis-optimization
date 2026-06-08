@@ -1024,8 +1024,7 @@ if data_result is not None:
     
     st.subheader("Справочник оборудования")
     df_display_catalog = pd.DataFrame(st.session_state.catalog)
-    df_display_catalog.columns = ['Система', 'Канал связи', 'Cost (Стоимость)', 'Cov (Охват)', 'Rel_base (Надежность)',
-                                  'Time (Время)']
+    df_display_catalog.columns = ['Система', 'Канал связи', 'Cost (Стоимость)', 'Cov (Охват)', 'Rel_base (Надежность)','Time (Время)']
     st.dataframe(df_display_catalog, use_container_width=True, hide_index=True)
 
     st.markdown("---")
