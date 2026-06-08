@@ -1011,8 +1011,8 @@ if data_result is not None:
         'cost': new_cost,
         'cov': new_cov,
         'rel': new_rel,
-        'time': new_time,
-        'k_act': new_k_act
+        'time': new_time
+        #'k_act': new_k_act
     })
 
     #if st.sidebar.button("Сбросить данные к заводским", use_container_width=True):
@@ -1021,12 +1021,11 @@ if data_result is not None:
 
     # ===== ОСНОВНАЯ ОБЛАСТЬ ЭКРАНА =====
     st.subheader("Технологические ограничения структуры каналов связи")
-    st.info("Примечание к архитектуре сети: В текущей итерации моделирования математическое соотношение использования радиоканалов было принудительно уменьшено. Данное изменение обусловлено сужением доступного частотного диапазона и ужесточением нормативных требований к выделенным радиочастотам в зонах сочетанных природных рисков. Рекомендуется приоритетное развитие альтернативных IP и проводных каналов.")
-
+    
     st.subheader("Справочник оборудования")
     df_display_catalog = pd.DataFrame(st.session_state.catalog)
     df_display_catalog.columns = ['Система', 'Канал связи', 'Cost (Стоимость)', 'Cov (Охват)', 'Rel_base (Надежность)',
-                                  'Time (Время)', 'K_act (Вовлеченность)']
+                                  'Time (Время)']
     st.dataframe(df_display_catalog, use_container_width=True, hide_index=True)
 
     st.markdown("---")
