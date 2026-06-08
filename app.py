@@ -21,7 +21,17 @@ sns.set_theme(style="whitegrid")
 
 # --- НАСТРОЙКА СТРАНИЦЫ ---
 st.set_page_config(page_title="ГИС Оптимизация ТСО v5.4", layout="wide")
-
+st.markdown(
+    """
+    <style>
+    #MainMenu {visibility: hidden;}
+    footer {visibility: hidden;}
+    .stAppDeployButton {display:none;}
+    header {visibility: hidden;}
+    </style>
+    """,
+    unsafe_allow_html=True
+)
 # --- ИНИЦИАЛИЗАЦИЯ БАЗОВОГО КАТАЛОГА В ПАМЯТИ ---
 DEFAULT_CATALOG = [
     {"name": "Речевые уст.", "ch": "Проводной", "cost": 100, "cov": 2500, "rel": 0.95, "time": 10, "k_act": 0.90},
