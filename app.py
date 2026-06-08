@@ -1005,7 +1005,7 @@ if data_result is not None:
                                       value=int(current_item['cov']), step=500)
     new_rel = st.sidebar.slider("Rel_base (Базовая надежность)", 0.50, 0.99, float(current_item['rel']), 0.01)
     new_time = st.sidebar.number_input("Time (Время срабатывания, сек)", min_value=1, max_value=3600, value=int(current_item['time']), step=1)
-    new_k_act = st.sidebar.slider("K_act (Коэф. вовлеченности)", 0.10, 1.00, float(current_item['k_act']), 0.05)
+    #new_k_act = st.sidebar.slider("K_act (Коэф. вовлеченности)", 0.10, 1.00, float(current_item['k_act']), 0.05)
 
     st.session_state.catalog[selected_idx].update({
         'cost': new_cost,
