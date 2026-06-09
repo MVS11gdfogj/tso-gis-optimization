@@ -1068,7 +1068,7 @@ if data_result is not None:
         col1.metric("Всего кластеров", len(df_res))
         col2.metric("Зон с рекомендацией ТСО", len(df_res[~df_res['Рекомендованное_ТСО'].isin(['ОБОРУДОВАНО СТАРОЙ СИРЕНОЙ', 'ОТБРАКОВАНО'])]))
         col3.metric("Общий бюджет (у.е.)", f"{df_res['Стоимость'].sum():,}")
-        col4.metric("Общий риск", f"{r_in:.2f}")
+        #col4.metric("Общий риск", f"{r_in:.2f}")
         
         # Tooltip и служебные поля для карты. Пересечения уже рассчитаны ДО оптимизации
         # в data_result и перенесены в df_res внутри run_optimization.
